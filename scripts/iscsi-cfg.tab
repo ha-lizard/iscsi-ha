@@ -1,0 +1,15 @@
+# Tab completion for iscsi-cfg command line tool for HA-Lizard
+
+_iscsi-cfg() 
+{
+	local cur prev base
+	COMPREPLY=()
+	cur="${COMP_WORDS[COMP_CWORD]}"
+	prev="${COMP_WORDS[COMP_CWORD-1]}"
+	
+	
+	local BASE_OPTIONS="get backup restore manual-mode-enable manual-mode-disable become-primary become-secondary log status"
+	COMPREPLY=($(compgen -W "${BASE_OPTIONS}" -- ${cur}))
+	return 0
+}
+complete -F _iscsi-cfg iscsi-cfg

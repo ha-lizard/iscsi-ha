@@ -1,0 +1,291 @@
+#!/bin/bash
+clear
+echo "#################################################################################"
+echo "#                                                                               #" 
+echo "# iscsi-ha - High Availability framework for iSCSI cluster used in conjunction  #"
+echo "# with XAPI based Xen Virtualization Environment (Xen Cloud Platform/XenServer) #"
+echo "# Copyright 2013-2024 Salvatore Costantino                                      #"
+echo "# www.ha-lizard.com                                                             #"
+echo "# ha@ixi0.com                                                                   #"
+echo "#                                                                               #"
+echo "#                                                                               #"
+echo "#    iscsi-ha is free software: you can redistribute it and/or modify           #"
+echo "#    it under the terms of the GNU General Public License as published by       #"
+echo "#    the Free Software Foundation, either version 3 of the License, or          #"
+echo "#    (at your option) any later version.                                        #"
+echo "#                                                                               #"
+echo "#    iscsi-ha is distributed in the hope that it will be useful,                #"
+echo "#    but WITHOUT ANY WARRANTY; without even the implied warranty of             #"
+echo "#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the              #"
+echo "#    GNU General Public License for more details.                               #"
+echo "#                                                                               #"
+echo "#    You should have received a copy of the GNU General Public License          #"
+echo "#    along with iscsi-ha.  If not, see <http://www.gnu.org/licenses/>.          #"
+echo "#                                                                               #"
+echo "#################################################################################"
+
+#################################
+# detect relative paths for
+# installation source
+#################################
+if [ -a ../iscsi-ha.conf ]
+then
+        source ../iscsi-ha.conf
+        source ../iscsi-ha.load
+	if [ "$POST_VERSION" = "1" ]
+        then
+               (./timeout 3 ./post_version.py $VERSION) &
+        fi
+else
+        INSTALLER_PATH=$0
+        BASE_PATH=${INSTALLER_PATH/scripts\/`basename $INSTALLER_PATH`}
+        CONFIG_PATH="$BASE_PATH"iscsi-ha.conf
+        LOAD_PATH="$BASE_PATH"iscsi-ha.load
+	if [ -a $CONFIG_PATH ]
+        then
+                source $CONFIG_PATH
+		source $LOAD_PATH
+                if [ "$POST_VERSION" = "1" ]
+                then
+                (`$BASE_PATH/scripts/timeout 3 $BASE_PATH/scripts/post_version.py $VERSION`) &
+                fi
+        fi
+fi
+
+####################################
+# check for --nostart flag and 
+# auto accept license if set
+####################################
+if [ "$1" = "--nostart" ]
+then
+	ACCEPT=YES
+else
+	echo "You must type <YES> to accept the software licence or any other key to exit"
+	read ACCEPT
+fi
+if [ "$ACCEPT" != "YES" ]
+then
+	echo "License not accepted - exiting"
+	exit 1
+else
+	echo "License Accepted"
+fi
+
+sleep 2
+clear
+echo "#############################################"
+echo "#############################################"
+echo "## iscsi-ha installer - installs iscsi-ha  ##"
+echo "#############################################"
+echo "#############################################"
+
+############################
+# Make sure this is an XCP
+# or XenServer host
+# before continuing
+############################
+RELEASE=`cat /etc/redhat-release`
+if [ $? != "0" ]
+then
+        RELEASE=UNKNOWN
+fi
+
+if [[ $RELEASE == XCP* ]] || [[ $RELEASE == XenServer* ]]
+then
+        echo "Host relese version = $RELEASE"
+else
+        echo "This host release ($RELEASE) not detected as an XCP or XenServer host"
+        echo "continue anyway? <CTRL + C> to exit OR <Enter> to continue"
+        read n1
+fi
+
+###############################
+# Check for requirted programs
+###############################
+REQUIRED=(awk echo logger hostname cat grep ping ip ifconfig drbdadm basename)
+for i in ${REQUIRED[@]}
+do
+        CHECK=`which $i 2>/dev/null`
+        if [ $? = "0" ]
+        then
+                echo "$CHECK found, OK.."
+        else
+                echo "*** Error locating executable [ $i ] required by iscsi-ha"
+                ERROR=1
+        fi
+done
+
+REQUIRED=("/etc/init.d/functions")
+for i in ${REQUIRED[@]}
+do
+        if [ -a $i ]
+        then
+                echo "$i found, OK.."
+        else
+                echo "*** Error locating file [ $i ] required by iscsi-ha"
+                ERROR=1
+        fi
+done
+if [ "$ERROR" = "1" ]
+then
+        echo "Some required executables not found. Check your system configuration"
+        echo "Continue anyway <Enter to continue or CTRL+C to exit>"
+        read CONTINUE
+fi
+
+##################################
+# Find path to installation files
+##################################
+INSTALL_PATH=`readlink -f $0`
+echo "Installing from $INSTALL_PATH"
+BASE_INSTALL_PATH=${INSTALL_PATH/scripts\/`basename $INSTALL_PATH`}
+echo "Installation files path found: $BASE_INSTALL_PATH"
+
+if [ "$1" != "--nostart" ]
+then
+	echo "<Enter> to complete installation or <ctrl +c> to quit"
+	read -n1
+fi
+echo "Copying files to /etc/iscsi-ha"
+
+#################################
+# If this is an upgrade - target
+# folder may already exist
+#################################
+if [ -d /etc/iscsi-ha ] && [ "$1" != "--nostart" ]
+then
+        echo "Installation folder already exists"
+	if [ -a /etc/iscsi-ha/iscsi-ha.conf ]
+	then
+		echo "Would you like to keep your existing configuration settings? <yes> to keep settings or <no> to replace with defaults."
+		read CONF
+		case "$CONF" in
+			yes)
+				echo "Backing up current configuration settings"
+				cp /etc/iscsi-ha/iscsi-ha.conf /tmp
+				;;
+			no)
+				echo "Current configuration settings will be discarded"
+				;;
+			*)
+				echo "invalid entry, exiting.."
+				exit 1
+				;;
+		esac
+	fi
+else
+        echo "Creating installation folder /etc/iscsi-ha"
+        mkdir -p /etc/iscsi-ha
+fi
+
+###################################
+# Copy installation files to target
+###################################
+cp -r $BASE_INSTALL_PATH/* /etc/iscsi-ha/
+
+#####################################
+# If this is an upgrade - check
+# whether we should keep the current
+# configuration settings.
+#####################################
+if [ "$CONF" = "yes" ]
+then
+        ################################
+        # Check if upgrading from 1.2.12
+        # or previous version
+        ################################
+	if [ `cat /tmp/iscsi-ha.conf | grep ~~~ | wc -l | tr -d [[:space:]]` -ge "1" ]
+	then
+		echo "Upgrading from Version 1.2.12 or earlier - converting configuration file"
+		mv -f /etc/iscsi-ha/iscsi-ha.conf /etc/iscsi-ha/iscsi-ha.conf.defaults
+		cat /tmp/iscsi-ha.conf | grep ~~~ -A 200 | grep -v ~~~ > /tmp/iscsi-ha.conf
+		cp -f /tmp/iscsi-ha.conf /etc/iscsi-ha/
+		if [ $? -eq 0 ]
+		then
+			rm -f /tmp/iscsi-ha.conf
+		fi
+	else
+		mv -f /etc/iscsi-ha/iscsi-ha.conf /etc/iscsi-ha/iscsi-ha.conf.defaults
+		cp -f /tmp/iscsi-ha.conf /etc/iscsi-ha/
+                if [ $? -eq 0 ]
+                then
+                        rm -f /tmp/iscsi-ha.conf
+                fi
+
+	fi
+fi
+
+###################################
+# Put tgtd drop-in opts in place
+###################################
+mkdir -p /etc/systemd/system/tgtd.service.d
+echo '[Service]
+TimeoutStopSec=2' > /etc/systemd/system/tgtd.service.d/local.conf
+
+###################################
+# Make executable
+###################################
+chmod +x /etc/iscsi-ha/scripts/*
+chmod +x /etc/iscsi-ha/init/*
+chmod +x /etc/iscsi-ha/iscsi-ha.sh
+
+####################################
+# Place tab completion script in 
+# /etc/bash_completion.d/
+####################################
+cp /etc/iscsi-ha/scripts/iscsi-cfg.tab /etc/bash_completion.d/
+chmod +x /etc/bash_completion.d/iscsi-cfg.tab
+. /etc/bash_completion.d/iscsi-cfg.tab
+
+
+####################################
+# place init scripts in init.d
+####################################
+echo "Copying init file to /etc/init.d/"
+cp /etc/iscsi-ha/init/iscsi-ha /etc/init.d/
+echo "Copying watchdog init file to /etc/init.d/"
+cp /etc/iscsi-ha/init/iscsi-ha-watchdog /etc/init.d/
+
+##############################################
+# create symlink to CLI tool - skip if exists
+##############################################
+if [ ! -h /bin/iscsi-cfg ]
+then
+	echo "Creating symbolic link for CLI tool"
+	ln -s /etc/iscsi-ha/scripts/iscsi-cfg /bin/iscsi-cfg
+else
+	echo "CLI tool link alredy exists - /bin/iscsi-cfg"
+fi
+
+#############################################
+# Insert any required pool DB params
+#############################################
+/etc/iscsi-ha/scripts/iscsi-cfg install
+
+#############################################
+# Check whether to start service now
+#############################################
+if [ "$1" = "--nostart" ]
+then
+	chkconfig iscsi-ha on
+	chkconfig iscsi-ha-watchdog on
+else
+	echo -e "\r\nStart iscsi-ha service and watchdog? <YES> or enter to start manually"
+        read START
+	if [ "$START" = "YES" ]
+	then
+		service iscsi-ha stop -w > /dev/null
+		echo "starting service"
+		chkconfig iscsi-ha on && service iscsi-ha start
+
+		echo "starting watchdog"
+		chkconfig iscsi-ha-watchdog on && service iscsi-ha-watchdog start
+	else
+		chkconfig iscsi-ha on
+		chkconfig iscsi-ha-watchdog on
+		echo "IMPORTANT: Before starting iscsi-ha, make all necessary configuration changes in /etc/iscsi-ha/iscsi-ha.conf"
+	fi
+fi
+
+echo -e "\r\nFinished"
+echo "Configuration parameters can be found/modified in /etc/iscsi-ha/iscsi-ha.conf"

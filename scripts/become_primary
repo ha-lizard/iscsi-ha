@@ -1,0 +1,23 @@
+#!/bin/bash
+source /etc/iscsi-ha/iscsi-ha.load
+RETRY=1
+if [ ! -e $IHA_STATE_PATH/manual ]
+then
+	echo "Host must be in manual mode for this operation"
+	echo "try 'iscsi-cfg manual-mode-enable'"
+	exit 1
+fi
+
+echo "Waiting for peer to transition to secondary storage role"
+while :
+do
+	echo -ne "Attempt [$RETRY] to become primary storage role with infinite attempts\r"
+	/etc/iscsi-ha/scripts/iscsi-cfg become-primary &>/dev/null
+	RETVAL=$?
+	if [ $RETVAL -eq 0 ]
+	then
+		/etc/iscsi-ha/scripts/iscsi-cfg status && break
+	fi
+	RETRY=$(( $RETRY + 1 ))
+	sleep 1
+done
