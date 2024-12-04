@@ -45,6 +45,8 @@
     "iscsi",
     "mailx",
     "Massimo",
+    "multipathd",
+    "networkctl",
     "noninteractive",
     "pipefail",
     "rpmbuild",
