@@ -1,0 +1,64 @@
+#!/bin/bash
+#################################################################################
+#                                                                               #
+# iscsi-ha - High Availability helper framework for iSCSI  used in conjunction  #
+# with XAPI based Xen Virtualization Environment (Xen Cloud Platform/XenServer) #
+# Copyright 2024 Salvatore Costantino                                           #
+# ha@ixi0.com                                                                   #
+#                                                                               #
+#                                                                               #
+#    iscsi-ha is free software: you can redistribute it and/or modify           #
+#    it under the terms of the GNU General Public License as published by       #
+#    the Free Software Foundation, either version 3 of the License, or          #
+#    (at your option) any later version.                                        #
+#                                                                               #
+#    iscsi-ha is distributed in the hope that it will be useful,                #
+#    but WITHOUT ANY WARRANTY; without even the implied warranty of             #
+#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the              #
+#    GNU General Public License for more details.                               #
+#                                                                               #
+#    You should have received a copy of the GNU General Public License          #
+#    along with iscsi-ha.  If not, see <http://www.gnu.org/licenses/>.          #
+#                                                                               #
+#################################################################################
+
+
+############################################
+#  Environment Initialization for iscsi-ha #
+#                                          #
+#          !!!! DO NOT MODIFY !!!!         #
+#                                          #
+############################################
+
+###################
+# Environment VARs
+###################
+VERSION="IHA_2.3.0"
+POST_VERSION=1
+PROG_NAME=iscsi-ha
+STATUS=/etc/iscsi-ha/state/status
+CAT=/bin/cat
+AWK=/bin/awk
+ECHO=/bin/echo
+DRBDADM=/sbin/drbdadm
+LOGGER=/bin/logger
+IFCONFIG=/sbin/ifconfig
+HOST=`hostname`
+MAIL=/etc/iscsi-ha/scripts/email_alert.py
+IP=/sbin/ip
+PING=/bin/ping
+ARPING=/sbin/arping
+GREP=/bin/grep
+TIMEOUT=/etc/iscsi-ha/scripts/timeout
+XE_TIMEOUT=13
+XE_PATH=/usr/bin/xe
+XE=xe_wrapper
+MAIL_SPOOL=/dev/shm/iscsi-ha-mail
+MAIL_SHARED_SETTINGS=$MAIL_SPOOL/mail_params
+IHA_STATE_PATH='/etc/iscsi-ha/state'
+TARGET_DROP_IN_DIR="/etc/systemd/system/tgtd.service.d"
+TARGET_DROP_IN_FILE="${TARGET_DROP_IN_DIR}/local.conf"
+TGTD_DROP_IN_OPTS='[Service] TimeoutStopSec=2'
+THIS_HOST_UUID_FILE='/etc/ha-lizard/state/local_host_uuid'
+THIS_POOL_UUID_FILE='/etc/ha-lizard/state/pool_uuid'
+# END Environment Settings

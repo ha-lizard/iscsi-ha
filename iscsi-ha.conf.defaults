@@ -1,0 +1,121 @@
+#!/bin/bash
+#################################################################################
+#                                                                               #
+# iscsi-ha - High Availability helper framework for iSCSI  used in conjunction  #
+# with XAPI based Xen Virtualization Environment (Xen Cloud Platform/XenServer) #
+# Copyright 2021 Salvatore Costantino                                           #
+# ha@ixi0.com                                                                   #
+#                                                                               #
+#                                                                               #
+#    iscsi-ha is free software: you can redistribute it and/or modify           #
+#    it under the terms of the GNU General Public License as published by       #
+#    the Free Software Foundation, either version 3 of the License, or          #
+#    (at your option) any later version.                                        #
+#                                                                               #
+#    iscsi-ha is distributed in the hope that it will be useful,                #
+#    but WITHOUT ANY WARRANTY; without even the implied warranty of             #
+#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the              #
+#    GNU General Public License for more details.                               #
+#                                                                               #
+#    You should have received a copy of the GNU General Public License          #
+#    along with iscsi-ha.  If not, see <http://www.gnu.org/licenses/>.          #
+#                                                                               #
+#################################################################################
+
+####################################
+#  Configuration File for iscsi-ha #
+####################################
+
+####################################
+# Declare the DRBD resource names
+# in a ":" separated list like this
+# resource1:resource2:resource3
+####################################
+DRBD_RESOURCES=iscsi1
+
+####################################
+# Set the name of the iSCSI target
+# daemon
+####################################
+ISCSI_TARGET_SERVICE=tgtd
+
+####################################
+# Declare the virtual "floating"
+# IP address and subnet mask to be
+# used for the iSCSI target
+# NOTE: It is expected that the
+# virtual/floating IP is on the 
+# same subnet as other system
+# interfaces. No changes to routing
+# or gateways are made by iscsi-ha
+# The IP set here should work with the
+# routing configuration of the environment
+####################################
+DRBD_VIRTUAL_IP=10.10.10.3
+DRBD_VIRTUAL_MASK=255.255.255.0
+
+###################################
+# Declare the interface to bind
+# the virtual IP to. Typically
+# xenbr0 or xapi0, xapi1, etc..
+# will vary based on environment
+###################################
+DRBD_INTERFACE=xenbr1
+
+##############################################
+# Set iscsi-ha monitor timers
+#
+# MONITOR_MAX_STARTS: Threshold for when
+# to assume running process is not responding.
+# Sets how many failed starts to wait before
+# killing any hung processes. Default = 5
+#
+# MONITOR_KILLALL: If MAX_MONITOR_STARTS
+# threshhold is reached - set whether to kill
+# processes. Default = 1
+# 1 = yes, 0 = no
+#
+# MONITOR_DELAY: Delay in seconds between
+# re-spawning iscsi-ha logic. 
+# Default = 10
+#
+# MONITOR_SCANRATE: iscsi-ha will not re-spawn
+# unless all current processes are completed.
+# If there are active processes while attempting
+# to start a new run, iscsi-ha will wait the
+# number of seconds set here before retrying.
+# Each successive fail will increment a counter
+# that may trigger KILLALL. Default = 10
+#################################################
+MONITOR_MAX_STARTS=5
+MONITOR_DELAY=10
+MONITOR_KILLALL=1
+MONITOR_SCANRATE=5
+
+#######################################
+# Enable Logging 1=yes, 0=no
+# logs written to /var/log/messages
+# All log messages labeled with "iscsi-ha"
+# View/Filter real time logging with:
+# tail -f /var/log/messages | grep iscsi-ha
+#######################################
+ENABLE_LOGGING=1
+
+##################################################################
+# Email Alert Settings
+# MAIL_USE_SHARED_PARAMS allows iscsi-ha to inherit ha-lizard
+# mail server settings when deployed on the same host.
+##################################################################
+
+MAIL_ON=1
+MAIL_USE_SHARED_PARAMS=1
+MAIL_SUBJECT="HA-Lizard noSAN SYSTEM ALERT - FROM HOST: $HOSTNAME" 
+MAIL_FROM="root@localhost"
+MAIL_TO="root@localhost"
+MAIL_SCREEN_TIME=30
+SMTP_SERVER=127.0.0.1
+SMTP_PORT=25
+SMTP_USER=""
+SMTP_PASS=""
+#END CONFIG FILE
+
