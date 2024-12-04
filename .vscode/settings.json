@@ -33,32 +33,7 @@
   },
 
   "cSpell.words": [
-    "addsign",
-    "autoselect",
-    "Autoselect",
-    "createrepo",
-    "elif",
-    "github",
-    "GITHUB",
-    "gnupg",
-    "hyperconverged",
-    "iscsi",
-    "mailx",
-    "Massimo",
-    "multipathd",
-    "networkctl",
-    "noninteractive",
-    "pipefail",
-    "rpmbuild",
-    "rpmmacros",
-    "RPMS",
-    "rpmsign",
-    "sendmail",
-    "shellcheck",
-    "smartctl",
-    "SRPM",
-    "SRPMS",
-    "XAPI"
+    "iscsi"
   ],
   "ansible.python.interpreterPath": "/bin/python3"
 }
