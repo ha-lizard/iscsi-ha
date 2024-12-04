@@ -1,0 +1,134 @@
+#!/bin/bash
+#################################################################################
+#                                                                               #
+# iscsi-ha - High Availability framework for iSCSI cluster used in conjunction  #
+# with XAPI based Xen Virtualization Environment (Xen Cloud Platform/XenServer) #
+# Copyright 2024 Salvatore Costantino                                           #
+# ha@ixi0.com                                                                   #
+#                                                                               #
+#                                                                               #
+#    iscsi-ha is free software: you can redistribute it and/or modify           #
+#    it under the terms of the GNU General Public License as published by       #
+#    the Free Software Foundation, either version 3 of the License, or          #
+#    (at your option) any later version.                                        #
+#                                                                               #
+#    iscsi-ha is distributed in the hope that it will be useful,                #
+#    but WITHOUT ANY WARRANTY; without even the implied warranty of             #
+#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the              #
+#    GNU General Public License for more details.                               #
+#                                                                               #
+#    You should have received a copy of the GNU General Public License          #
+#    along with iscsi-ha.  If not, see <http://www.gnu.org/licenses/>.          #
+#                                                                               #
+#################################################################################
+clear
+echo "#################################################################################################"
+echo "#################################################################################################"
+echo "## iscsi-ha uninstaller - removes iscsi-ha, mail and sendmail (if chosen)                      ##"
+echo "##                                                                                             ##"
+echo "#################################################################################################"
+echo "#################################################################################################"
+
+############################
+# Make sure this is an XCP
+# or XenServer host
+# before continuing
+############################
+RELEASE=`cat /etc/redhat-release`
+if [ $? != "0" ]
+then
+	RELEASE=UNKNOWN
+fi
+
+if [[ $RELEASE == XCP* ]] || [[ $RELEASE == XenServer* ]]
+then
+	echo "Host relese version = $RELEASE"
+else
+        echo "This host release ($RELEASE) not detected as an XCP or XenServer host"
+        echo "continue anyway? <CTRL + C> to exit OR <Enter> to continue"
+        read n1
+fi
+
+#############################
+# Check if sendmail and mailx
+#############################
+
+echo "Checking if sendmail is installed"
+CHECK_SENDMAIL=`rpm -qa | grep sendmail`
+if [ $CHECK_SENDMAIL ]
+then
+	echo "sendmail installation found: $CHECK_SENDMAIL"
+	echo "Sendmail may have been installed with iscsi-ha. Would you like to remove sendmail from this host? <yes or no>"
+	read UNINSTALL_SENDMAIL
+	if [ $UNINSTALL_SENDMAIL = "yes" ]
+        then
+                ((yum remove sendmail -y) 1>/dev/null)
+                if [ $? = "0" ]
+                then
+                        echo "Successfully removed sendmail"
+                else
+                        echo "Error removing sendmail"
+                fi
+        else
+                echo "Skipping sendmail removal"
+        fi
+else
+	echo "Sendmail not install on this host"
+fi
+	
+echo "Checking if mailx is installed"
+CHECK_MAILX=`rpm -qa | grep mailx`
+if [ $CHECK_MAILX ]
+then
+        echo "mailx installation found: $CHECK_MAILX"
+        echo "mailx may have been intalled with iscsi-ha. Would you like to remove mailx from this host? <yes or no>"
+        read UNINSTALL_MAILX
+        if [ $UNINSTALL_MAILX = "yes" ]
+        then
+                ((yum remove mailx -y) 1>/dev/null)
+                if [ $? = "0" ]
+                then
+                        echo "Successfully removed mailx"
+                else
+                        echo "Error removing mailx"
+                fi
+        else
+                echo "Skipping mailx removal"
+        fi
+else
+        echo "mailx not install on this host"
+fi
+
+echo "Would you like to keep a copy of the iscsi-ha configuration file in /tmp? <yes or no>"
+read KEEP_CONFIG
+if [ $KEEP_CONFIG = "yes" ]
+then
+	cp /etc/iscsi-ha/iscsi-ha.conf /tmp
+	if [ $? = "0" ]
+	then
+		echo "Configuration file saved in /tmp"
+	fi
+fi
+
+echo "Removing all iscsi-ha files and application. Continue? <yes or no>"
+read REMOVE
+if [ $REMOVE = "yes" ]
+then
+	rm -f /etc/bash_completion.d/iscsi-cfg.tab
+        if [ -h /bin/iscsi-cfg ]
+        then
+                echo "Removing symbolic link for CLI tool"
+                rm -f /bin/iscsi-cfg
+        fi
+
+	chkconfig --del iscsi-ha
+	chkconfig --del iscsi-ha-watchdog
+	service iscsi-ha stop -w
+	rm -rf /etc/iscsi-ha && rm -f /etc/init.d/iscsi-ha && rm -f /etc/init.d/iscsi-ha-watchdog
+	if [ $? = 0 ] 
+	then
+		echo "iscsi-ha successfully removed"
+	fi
+fi
+
+echo "Finished"
