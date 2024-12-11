@@ -35,6 +35,8 @@
   "cSpell.words": [
     "addsign",
     "APPL",
+    "arping",
+    "ARPING",
     "assword",
     "autopromote",
     "autoselect",
@@ -137,6 +139,7 @@
     "xapi",
     "XAPI",
     "xenapi",
+    "xenbr",
     "xencenter",
     "xenops",
     "xenopsd",

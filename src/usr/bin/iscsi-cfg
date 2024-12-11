@@ -23,11 +23,11 @@
 # shellcheck source=/dev/null
 #exec 2>/dev/null
 CONF=/etc/iscsi-ha/iscsi-ha.conf
-ENVIRO=/etc/iscsi-ha/iscsi-ha.load
+ENVIRO=/etc/iscsi-ha/iscsi-ha.init
 STATUS_EXEC=/etc/iscsi-ha/scripts/status
 CONFIG_EXEC=/etc/iscsi-ha/scripts/config_manager
 
-source /etc/iscsi-ha/iscsi-ha.load
+source /etc/iscsi-ha/iscsi-ha.init
 source /etc/iscsi-ha/iscsi-ha.conf
 source /etc/iscsi-ha/iscsi-ha.func
 
@@ -189,8 +189,6 @@ function manual_mode_disable() {
 # peer to be in secondary state
 ####################################
 function become_primary() {
-  source /etc/iscsi-ha/iscsi-ha.load
-  source /etc/iscsi-ha/iscsi-ha.conf
   # Make sure we are in manual mode before proceeding
   if [ -e "$IHA_STATE_PATH/manual" ]; then
     ############################
@@ -266,16 +264,8 @@ function become_primary() {
 # iscsi-ha to be in manual mode
 ####################################
 function become_secondary() {
-  source /etc/iscsi-ha/iscsi-ha.load
-  source /etc/iscsi-ha/iscsi-ha.conf
   # Make sure we are in manual mode before proceeding
   if [ -e "$IHA_STATE_PATH/manual" ]; then
-    ###############################
-    # Read configuration parameters
-    # and functions library
-    ###############################
-    source /etc/iscsi-ha/iscsi-ha.conf
-    source /etc/iscsi-ha/iscsi-ha.func
     ##########################
     # Apply the secondary role
     ##########################
@@ -474,7 +464,4 @@ Available actions:
 <-v>:                   Display Version
 EOF
   ;;
-
-v) ;;
-
 esac

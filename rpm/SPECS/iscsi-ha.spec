@@ -120,7 +120,7 @@ fi
 # Scripts and binaries
 %{_sysconfdir}/iscsi-ha/scripts
 %{_sysconfdir}/iscsi-ha/iscsi-ha.func
-%{_sysconfdir}/iscsi-ha/iscsi-ha.load
+%{_sysconfdir}/iscsi-ha/iscsi-ha.init
 
 # Init and systemd service files
 %{_sysconfdir}/iscsi-ha/init/iscsi-ha

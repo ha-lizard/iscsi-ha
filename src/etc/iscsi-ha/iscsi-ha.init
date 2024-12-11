@@ -1,0 +1,37 @@
+################################################################################
+#            iscsi-ha Environment Initialization                               #
+#                                                                              #
+#                  !!!! DO NOT MODIFY THE FOLLOWING !!!!                       #
+#                                                                              #
+# This section contains critical settings required for iscsi-ha to function    #
+# correctly. Any modifications may cause instability or failure.               #
+################################################################################
+
+ARPING=/sbin/arping
+AWK=/bin/awk
+CAT=/bin/cat
+DRBDADM=/sbin/drbdadm
+ECHO=/bin/echo
+GREP=/bin/grep
+HOST=$(hostname)
+IFCONFIG=/sbin/ifconfig
+IHA_STATE_PATH='/etc/iscsi-ha/state'
+IP=/sbin/ip
+LOGGER=/bin/logger
+MAIL_SHARED_SETTINGS=$MAIL_SPOOL/mail_params
+MAIL_SPOOL=/dev/shm/iscsi-ha-mail
+MAIL=/etc/iscsi-ha/scripts/email_alert.py
+PING=/bin/ping
+POST_VERSION=1
+PROG_NAME=iscsi-ha
+STATUS=/etc/iscsi-ha/state/status
+TARGET_DROP_IN_DIR="/etc/systemd/system/tgtd.service.d"
+TARGET_DROP_IN_FILE="${TARGET_DROP_IN_DIR}/local.conf"
+TGTD_DROP_IN_OPTS='[Service] TimeoutStopSec=2'
+THIS_HOST_UUID_FILE='/etc/ha-lizard/state/local_host_uuid'
+THIS_POOL_UUID_FILE='/etc/ha-lizard/state/pool_uuid'
+TIMEOUT=/etc/iscsi-ha/scripts/timeout
+VERSION="__VERSION__"
+XE_PATH=/usr/bin/xe
+XE_TIMEOUT=13
+XE=xe_wrapper
