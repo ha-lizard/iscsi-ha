@@ -1,0 +1,25 @@
+# shellcheck shell=bash
+# Tab completion for iscsi-cfg command line tool for HA-Lizard
+
+# Bind the completion function to the iscsi-cfg command
+complete -F _iscsi-cfg iscsi-cfg
+
+_iscsi-cfg() {
+  # Local variable to hold the current word from the completion context
+  local cur
+  # Initialize the COMPREPLY array (auto-completion result)
+  COMPREPLY=()
+
+  # Get the current word from the completion context
+  cur="${COMP_WORDS[COMP_CWORD]}"
+
+  # Define the available options for completion
+  local BASE_OPTIONS="get backup restore manual-mode-enable manual-mode-disable become-primary become-secondary log status"
+
+  # Use compgen to generate possible completions based on the current word and available options
+  # Store the results in COMPREPLY
+  mapfile -t COMPREPLY < <(compgen -W "${BASE_OPTIONS}" -- "${cur}")
+
+  # Return 0 to indicate successful completion
+  return 0
+}
