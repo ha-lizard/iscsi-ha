@@ -1,0 +1,480 @@
+#!/bin/bash
+################################################################################
+#                                                                              #
+# iscsi-ha - High Availability framework for iSCSI cluster used in conjunction #
+# with XAPI based Xen Virtualization Environment (Xen Cloud Platform/XenServer)#
+# Copyright 2024 Salvatore Costantino                                          #
+# ha@ixi0.com                                                                  #
+#                                                                              #
+# iscsi-ha is free software: you can redistribute it and/or modify             #
+# it under the terms of the GNU General Public License as published by         #
+# the Free Software Foundation, either version 3 of the License, or            #
+# (at your option) any later version.                                          #
+#                                                                              #
+# iscsi-ha is distributed in the hope that it will be useful,                  #
+# but WITHOUT ANY WARRANTY; without even the implied warranty of               #
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the                #
+# GNU General Public License for more details.                                 #
+#                                                                              #
+# You should have received a copy of the GNU General Public License            #
+# along with iscsi-ha.  If not, see <http://www.gnu.org/licenses/>.            #
+#                                                                              #
+################################################################################
+# shellcheck source=/dev/null
+#exec 2>/dev/null
+CONF=/etc/iscsi-ha/iscsi-ha.conf
+ENVIRO=/etc/iscsi-ha/iscsi-ha.load
+STATUS_EXEC=/etc/iscsi-ha/scripts/status
+CONFIG_EXEC=/etc/iscsi-ha/scripts/config_manager
+
+source /etc/iscsi-ha/iscsi-ha.load
+source /etc/iscsi-ha/iscsi-ha.conf
+source /etc/iscsi-ha/iscsi-ha.func
+
+#################################
+# Function get retrieves all
+# params from configuration file
+# and displays.
+#################################
+function get() {
+  if [ -e "$CONF" ]; then
+    echo -e "Displaying iscsi-ha configuration for $HOSTNAME\r\n"
+    grep -v '^#' "$CONF" | grep -v '^$'
+  else
+    echo -e "iscsi-ha configuration file missing or not installed: $CONF"
+  fi
+} # End function get
+
+###################################
+# Function status - display
+# running status and associated
+# application statuses
+###################################
+display_status() {
+  if [ -e "$STATUS_EXEC" ]; then
+    "$STATUS_EXEC"
+  else
+    red
+    echo "Error: Missing file - $STATUS_EXEC needed for selected action. Check configuration"
+    normal
+  fi
+} # End function status
+
+##################################
+# Function to view iscsi-ha real
+# time log output
+##################################
+function display_log() {
+  echo "This will display a real time log session for iscsi-ha"
+  echo "Control + C to exit."
+  sleep 2
+  clear
+  tail -f /var/log/user.log | grep iscsi-ha
+} # End function display_log
+
+function green() {
+  echo -e -n "\E[32m"
+}
+
+function red() {
+  echo -e -n "\E[31m"
+}
+
+function yellow() {
+  echo -e -n "\E[33m"
+}
+
+function normal() {
+  echo -e -n '\E[0m'
+}
+
+#################################
+# Function to check if iscsi-ha
+# service is running.
+# Return 0 on true (running)
+# Return 1 on false (stopped)
+#################################
+function check_service_run_state() {
+  service_execute "$PROG_NAME" status >/dev/null
+  RETVAL=$?
+  if [ "$RETVAL" -ne 0 ]; then
+    return 1
+  else
+    return 0
+  fi
+} # End function check_service_run_state
+
+#################################
+# Function to enter manual mode
+#################################
+function manual_mode_enable() {
+
+  # Make sure we are not already in manual mode
+  if [ -e "$IHA_STATE_PATH/manual" ]; then
+    echo "Manual mode already enabled - exiting"
+    return 1
+  fi
+
+  # Enter manual mode
+  MY_POOL_ROLE=$(awk -F ':' '{print $1}' /etc/xensource/pool.conf | tr -d '[:space:]')
+  if [ "$MY_POOL_ROLE" = "master" ]; then
+    echo "become_primary" >"$IHA_STATE_PATH/manual"
+  else
+    echo "become_secondary" >"$IHA_STATE_PATH/manual"
+  fi
+  # BUG: this always return true
+  if [ $? -eq 0 ]; then
+    echo "iscsi-ha now in manual mode"
+    yellow
+    echo "Note: High Availability should be disabled if any hosts will be shutdown or rebooted"
+    normal
+    return 0
+  else
+    echo "Failed to enter manual mode - reverting changes"
+    chkconfig iscsi-ha on && chkconfig iscsi-ha-watchdog on && rm -f "$IHA_STATE_PATH/manual" >/dev/null
+    return 1
+  fi
+} # End function manual_mode_enable
+
+#################################
+# Function to exit manual mode
+#################################
+function manual_mode_disable() {
+
+  ##########################################
+  # Prevent exiting manual mode if current
+  # role does not match role of host in pool
+  # eg. master/primary slave/secondary
+  ##########################################
+  MY_DRBD_ROLE=$(drbdadm role all | awk -F '/' '{print $1}' | tr -d '[:space:]')
+  MY_POOL_ROLE=$(awk -F ':' '{print $1}' /etc/xensource/pool.conf | tr -d '[:space:]')
+  if [ "$MY_DRBD_ROLE" = "Primary" ] && [ "$MY_POOL_ROLE" != "master" ]; then
+    echo "This host's storage is in Primary mode but this is not the pool master"
+    echo "demote this host's storage to Secondary before disabling manual mode"
+    echo "Exiting.."
+    exit 1
+  fi
+
+  if [ "$MY_DRBD_ROLE" = "Secondary" ] && [ "$MY_POOL_ROLE" != "slave" ]; then
+    echo "This host's storage is in Secondary mode but this is not the pool slave"
+    echo "promote this host's storage to Primary before disabling manual mode"
+    echo "Exiting.."
+    exit 1
+  fi
+
+  rm -f "$IHA_STATE_PATH/manual" >/dev/null
+
+  if [ $? -eq 0 ]; then
+    echo "iscsi-ha exited manual mode"
+    ###################
+    # Start services
+    ###################
+    check_service_run_state
+    RETVAL=$?
+    if [ "$RETVAL" -eq 0 ]; then
+      echo "NOTICE: iscsi-ha is running"
+    else
+      service iscsi-ha start
+    fi
+    return "$?"
+  else
+    echo "Error detected while exiting manual mode"
+    exit 1
+  fi
+} # End function manual_mode_disable
+
+####################################
+# Function become_primary - requires
+# iscsi-ha to be in manual mode AND
+# peer to be in secondary state
+####################################
+function become_primary() {
+  source /etc/iscsi-ha/iscsi-ha.load
+  source /etc/iscsi-ha/iscsi-ha.conf
+  # Make sure we are in manual mode before proceeding
+  if [ -e "$IHA_STATE_PATH/manual" ]; then
+    ############################
+    # Make sure peer host is not
+    # in DRBD primary mode
+    ############################
+    RESTORE_IFS=$IFS
+    IFS=":"
+    for i in "${DRBD_RESOURCES[@]}"; do
+      ROLES=$(drbdadm role "$i")
+      PEER_ROLE=$(echo "$ROLES" | awk -F '/' '{print $2}' | tr -d '[:space:]')
+      if [ "$PEER_ROLE" = "Primary" ]; then
+        echo "Peer DRBD role detected as $PEER_ROLE"
+        echo "Try making the peer secondary first"
+        echo "Exiting.."
+        exit 1
+      fi
+    done
+    IFS=$RESTORE_IFS
+
+    ###########################
+    # Make sure floating IP is
+    # not present on network
+    ###########################
+    local_ip_list
+    if [ $? -eq 0 ]; then
+      for IPADDR in "${LOCAL_IP_LIST[@]}"; do
+        if [ "$IPADDR" = "$DRBD_VIRTUAL_IP" ]; then
+          VIP_IS_LOCAL=1
+          break
+        fi
+      done
+
+      if [ "$VIP_IS_LOCAL" != "1" ]; then
+        #################################
+        # Make sure virtual IP is
+        # not live on other host
+        #################################
+        if check_ip_health "$DRBD_VIRTUAL_IP" 1; then
+          echo "Virtual IP $DRBD_VIRTUAL_IP detected on network"
+          echo "Make sure peer host is in manual/secondary mode"
+          echo "Try running the following commands on the peer first"
+          echo "iscsi-cfg manual-mode-enable"
+          echo "iscsi-cfg become-secondary"
+          echo "Exiting.."
+          exit 1
+        fi
+      fi
+    else
+      echo "Error while detecting local IP addresses"
+      exit 1
+    fi
+
+    ########################
+    # Apply the primary role
+    ########################
+    /etc/iscsi-ha/iscsi-ha.sh become_primary &>/dev/null
+    echo "become_primary" >"$IHA_STATE_PATH/manual"
+    display_status
+    return 0
+  else
+    red
+    echo "Host must be in manual mode in order to perform this action"
+    echo "Try 'iscsi-cfg manual-mode-enable' first"
+    normal
+    echo "Exiting.."
+    exit 1
+  fi
+} # End function become_primary
+
+####################################
+# Function become_secondary - requires
+# iscsi-ha to be in manual mode
+####################################
+function become_secondary() {
+  source /etc/iscsi-ha/iscsi-ha.load
+  source /etc/iscsi-ha/iscsi-ha.conf
+  # Make sure we are in manual mode before proceeding
+  if [ -e "$IHA_STATE_PATH/manual" ]; then
+    ###############################
+    # Read configuration parameters
+    # and functions library
+    ###############################
+    source /etc/iscsi-ha/iscsi-ha.conf
+    source /etc/iscsi-ha/iscsi-ha.func
+    ##########################
+    # Apply the secondary role
+    ##########################
+    /etc/iscsi-ha/iscsi-ha.sh become_secondary &>/dev/null
+    echo "become_secondary" >"$IHA_STATE_PATH/manual"
+    display_status
+    return 0
+  else
+    red
+    echo "Host must be in manual mode in order to perform this action"
+    echo "Try 'iscsi-cfg manual-mode-enable' first"
+    normal
+    echo "Exiting.."
+    exit 1
+  fi
+} # End function become_secondary
+
+##############################
+# Function inserts default
+# global parameters into xapi
+# custom settings
+##############################
+# Function to insert parameters into the pool's database
+# This is primarily used to repair broken installations or database mappings
+function insert() {
+  local POOL_UUID
+  # Determine the pool UUID from file or xe tool
+  if [ -e "$THIS_POOL_UUID_FILE" ]; then
+    POOL_UUID=$(<"$THIS_POOL_UUID_FILE")
+  else
+    POOL_UUID=$(xe pool-list --minimal)
+  fi
+
+  # Iterate through installation parameters and add them to the pool database
+  while read -r line; do
+    PARAM=$(echo "$line" | awk -F "=" '{print $1}')
+    VALUE=$(echo "$line" | awk -F "=" '{print $2}')
+
+    # Add parameter if it does not already exist
+    if ! xe pool-param-get uuid="$POOL_UUID" param-name=other-config param-key="$PARAM" &>/dev/null; then
+      xe pool-param-add uuid="$POOL_UUID" param-name=other-config "$PARAM=$VALUE"
+      echo "Inserting [$PREFIX$PARAM=$VALUE]"
+    fi
+
+  done </etc/iscsi-ha/scripts/install.params
+} # End function insert
+
+##################################
+# function manage_db_manual_mode
+# Helper function to manage
+# stateful mode used for maintenance
+# operations. Stores a key=value
+# pair in DB of
+# host_uuid=[primary|secondary|enabled]
+#
+# Args passed in:
+# arg1: "primary" or "secondary" or "enable"
+#
+# A host can be in 1 of 3 states when manual mode is enabled.
+# primary    follows iscsi-cfg become-primary
+# secondary  follows iscsi-cfg become-secondary
+# enable     follows iscsi-cfg manual-mode-enable
+#
+#
+# Returns:
+# 0 on success
+# 1 on general error
+#################################
+function manage_db_manual_mode() {
+
+  local NEW_MODE=$1
+  local THIS_HOST_UUID
+  local THIS_POOL_UUID
+  local MANUAL_MODE_LIST
+  local MANUAL_MODE_ARR
+
+  # Get host UUID from file or xe tool
+  if [ -e "$THIS_HOST_UUID_FILE" ]; then
+    THIS_HOST_UUID=$(<"$THIS_HOST_UUID_FILE")
+  else
+    THIS_HOST_UUID=$($XE host-list hostname="$HOST" --minimal)
+  fi
+
+  # Get pool UUID from file or xe tool
+  if [ -e "$THIS_POOL_UUID_FILE" ]; then
+    THIS_POOL_UUID=$(<"$THIS_POOL_UUID_FILE")
+  else
+    THIS_POOL_UUID=$($XE pool-list --minimal)
+  fi
+
+  # Validate host UUID length
+  if [ ${#THIS_HOST_UUID} -ne 36 ]; then
+    echo "Error determining ID of this host"
+    return 1
+  fi
+
+  # Fetch and parse the existing manual mode list
+  MANUAL_MODE_LIST=$($XE pool-param-get uuid="$THIS_POOL_UUID" param-name=other-config param-key=MANUAL_MODE)
+  IFS=',' read -r -a MANUAL_MODE_ARR <<<"$MANUAL_MODE_LIST"
+  local RESULT=''
+  local INSERTED="false"
+
+  for string in "${MANUAL_MODE_ARR[@]}"; do
+    THIS_STRING_UUID=$(echo "$string" | awk -F '=' '{print $1}')
+
+    if [ "$THIS_STRING_UUID" = "$THIS_HOST_UUID" ]; then
+      if [ "$NEW_MODE" != "disable" ]; then
+        #We are replacing this string
+        local NEW_STRING="${THIS_HOST_UUID}=${NEW_MODE}"
+        [ ${#RESULT} -gt 32 ] && RESULT+=",$NEW_STRING" || RESULT+="$NEW_STRING"
+        INSERTED="true"
+      fi
+    else
+      #This UUID is not local - re-insert into array
+      [ ${#RESULT} -gt 32 ] && RESULT+=",$string" || RESULT+="$string"
+    fi
+  done
+
+  # Add new entry if not already present and not disabling
+  if [ "$INSERTED" = "false" ] && [ "$NEW_MODE" != "disable" ]; then
+    local NEW_STRING="${THIS_HOST_UUID}=${NEW_MODE}"
+    [ ${#RESULT} -gt 32 ] && RESULT+=",$NEW_STRING" || RESULT+="$NEW_STRING"
+  fi
+
+  # Update the pool's manual mode configuration
+  xe pool-param-set uuid="$THIS_POOL_UUID" other-config:MANUAL_MODE="$RESULT"
+} # End function manage_db_manual_mode
+
+# Main case statement to handle commands
+case $1 in
+get)
+  get "$2"
+  ;;
+manual-mode-enable)
+  manual_mode_enable && manage_db_manual_mode enable
+  ;;
+manual-mode-disable)
+  manual_mode_disable && manage_db_manual_mode disable
+  ;;
+become-primary)
+  become_primary && manage_db_manual_mode primary
+  ;;
+become-secondary)
+  become_secondary && manage_db_manual_mode secondary
+  ;;
+log)
+  display_log
+  ;;
+backup)
+  ${CONFIG_EXEC} save
+  ;;
+restore)
+  ${CONFIG_EXEC} restore
+  ;;
+status)
+  display_status
+  ;;
+insert)
+  insert
+  ;;
+-v)
+  eval "$(grep -e "^VERSION=" "$ENVIRO")"
+  echo "$VERSION"
+  ;;
+*)
+  cat <<EOF
+iSCSI-HA Monitoring Tool: Add-on for HA-Lizard: XenServer/XCP High Availability
+Usage: iscsi-cfg <action>
+
+Available actions:
+<log>:                  Watch iSCSI-HA log file output in real time
+<get>:                  Lists all iSCSI-HA configuration parameters
+<backup>:               Copies all required configuration files
+                        (lvm, drbd, tgt, iscsi-ha, iptables)
+                        to pool DB. Allows for restoring configuration into
+                        the runtime environment when dom0 upgrades are performed which
+                        would normally erase settings.
+<restore>:              Restores all centrally saved static configuration
+                        files and parameters. Allows for full restoration of
+                        runtime environment when performing a dom0 upgrade.
+<manual-mode-enable>:   Enter manual mode - required to manually select roles
+                        Allows for manually moving iSCSI target to desired host
+                        Used to manage rolling updates and server reboots
+                        with no VM downtime.
+<manual-mode-disable>:  Exit manual mode - automatic selection of roles enabled
+                        Operation returns to normal - iSCSI-HA manages roles
+<become-primary>:       Manually promotes host to primary role regardless of
+                        role of the host in the pool master/slave. Only works
+                        when operating in manual mode.
+<become-secondary>:     Manually demotes host to secondary role regardless of
+                        role of the host in the pool master/slave. Only works
+                        when operating in manual mode.
+<status>:               Displays the iSCSI-HA operational status
+<insert>:               Inserts required parameters into DB. Only required to
+                        repair a broken installation or DB map.
+<-v>:                   Display Version
+EOF
+  ;;
+
+v) ;;
+
+esac
