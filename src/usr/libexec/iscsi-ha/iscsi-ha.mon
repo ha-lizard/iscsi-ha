@@ -18,7 +18,7 @@
 # Script configuration
 PROC_NAME=iscsi-ha
 LOCK_FILE=/var/lock/subsys/${PROC_NAME}
-EXECUTE=/etc/iscsi-ha/iscsi-ha.sh
+EXECUTE=/usr/libexec/iscsi-ha/iscsi-ha.sh
 GLOBAL_CONF=/etc/iscsi-ha/iscsi-ha.load
 OVERRIDE_CONF=/etc/iscsi-ha/iscsi-ha.conf
 LIB_FUNCTIONS=/usr/lib64/iscsi-ha/iscsi-ha.func

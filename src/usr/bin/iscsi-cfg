@@ -245,7 +245,7 @@ function become_primary() {
     ########################
     # Apply the primary role
     ########################
-    /etc/iscsi-ha/iscsi-ha.sh become_primary &>/dev/null
+    /usr/libexec/iscsi-ha/iscsi-ha.sh become_primary &>/dev/null
     echo "become_primary" >"$IHA_STATE_PATH/manual"
     display_status
     return 0
@@ -269,7 +269,7 @@ function become_secondary() {
     ##########################
     # Apply the secondary role
     ##########################
-    /etc/iscsi-ha/iscsi-ha.sh become_secondary &>/dev/null
+    /usr/libexec/iscsi-ha/iscsi-ha.sh become_secondary &>/dev/null
     echo "become_secondary" >"$IHA_STATE_PATH/manual"
     display_status
     return 0
