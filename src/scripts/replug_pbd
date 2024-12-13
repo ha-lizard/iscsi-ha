@@ -19,36 +19,31 @@
 #                                                                               #
 #################################################################################
 
-STATE=$(/bin/cat /etc/xensource/pool.conf)
-if [[ $STATE == slave* ]]
-then
-        # Make sure master is responding before making calls to xe
-        MASTER_IP=`cat /etc/xensource/pool.conf | awk -F ":" '{print $2}'`
-        ping -c 1 -w 1 $MASTER_IP > /dev/null
-        if [ $? -ne 0 ]
-        then
-                echo "Pool Master $MASTER_IP not responding - replug_pbd exiting"
-                exit 1
-        fi
+STATE=$(</etc/xensource/pool.conf)
+if [[ $STATE == slave* ]]; then
+  # Make sure master is responding before making calls to xe
+  MASTER_IP=$(awk -F ":" '{print $2}' /etc/xensource/pool.conf)
+  if ! ping -c 1 -w 1 "$MASTER_IP" >/dev/null; then
+    echo "Pool Master $MASTER_IP not responding - replug_pbd exiting"
+    exit 1
+  fi
 fi
 
 HOST_NAME=$(hostname)
-THIS_HOST_UUID=$(xe host-list name-label=$HOST_NAME --minimal)
+THIS_HOST_UUID=$(xe host-list name-label="$HOST_NAME" --minimal)
 ISCSI_SR_LIST=$(xe sr-list type=lvmoiscsi --minimal | awk -F "," '{$1=$1}1')
-VG_LIST=$(vgscan | grep -v Reading | awk -F "VG_XenStorage-" {'print $2'} | awk -F ""\" {'print $1'})
+VG_LIST=$(vgscan | grep -v Reading | awk -F "VG_XenStorage-" '{print $2}' | awk -F "\"" '{print $1}')
 
-if [ "$1" != "--silent" ]
-then
-	echo "replug_pbd Version 1.3: Replugs a PBD where a VG is not scanned. Attempts to resolve"
-	echo "XenServer errors: SR_BACKEND_FAILURE_40 or SR_BACKEND_FAILURE_46 or VDI is not available"
-	echo "Currently works with iSCSI SRs."
-	echo
-
-	echo -e "\r"
-	echo "Hostname Found:          $HOST_NAME"
-	echo "Host UUID Found:         $THIS_HOST_UUID"
-	echo "iSCSI SR(s) Found:       "$ISCSI_SR_LIST""
-	echo -e "Volume Groups Found:     "$VG_LIST"\r\n"
+if [ "$1" != "--silent" ]; then
+  echo "replug_pbd Version __VERSION__: Replugs a PBD where a VG is not scanned. Attempts to resolve"
+  echo "XenServer errors: SR_BACKEND_FAILURE_40 or SR_BACKEND_FAILURE_46 or VDI is not available"
+  echo "Currently works with iSCSI SRs."
+  echo
+  echo -e "\r"
+  echo "Hostname Found:          $HOST_NAME"
+  echo "Host UUID Found:         $THIS_HOST_UUID"
+  echo "iSCSI SR(s) Found:       $ISCSI_SR_LIST"
+  echo -e "Volume Groups Found:     $VG_LIST\r\n"
 fi
 
 #######################################
@@ -56,68 +51,64 @@ fi
 # plugs the PBD for the passed in
 # SR UUID and Host UUID
 #
-# Ars passed in:
+# Args passed in:
 # arg1 = SR UUID
 # arg2 = Host UUID
 #
 # Returns 0 on success
 # Returns 1 on failure/error
 ########################################
-function replug_pbd ()
-{
-PBD=$(xe pbd-list sr-uuid=$1 host-uuid=$2 --minimal)
-if [ $? -eq 0 ] && [[ -n ${PBD} ]]
-then
-	echo "replugging PBD: $PBD"
-	xe pbd-unplug uuid=$PBD && xe pbd-plug uuid=$PBD
-	if [ $? -eq 0 ]
-	then
-		echo "Successfully re-plugged PBD: $PBD"
-		return 0
-	else
-		echo "Failed to re-plug PBD: $PBD"
-		return 1
-	fi
-else
-	echo "Failed to locate PBD for SR: $1 on HOST: $2"
-	return 1
-fi
-} #End Function replug_pbd
+replug_pbd() {
+  PBD=$(xe pbd-list sr-uuid="$1" host-uuid="$2" --minimal)
+  if [ $? -eq 0 ] && [[ -n $PBD ]]; then
+    echo "replugging PBD: $PBD"
+    if xe pbd-unplug uuid="$PBD" && xe pbd-plug uuid="$PBD"; then
+      echo "Successfully re-plugged PBD: $PBD"
+      return 0
+    else
+      echo "Failed to re-plug PBD: $PBD"
+      return 1
+    fi
+  else
+    echo "Failed to locate PBD for SR: $1 on HOST: $2"
+    return 1
+  fi
+}
 
 #############################################
-# Make sure each iscsi SR has a corresponding
+# Ensure each iSCSI SR has a corresponding
 # VG found, else re-plug the PBD
 #############################################
-for iscsi_sr in ${ISCSI_SR_LIST[@]}
-do
-	echo "Scanning for Volume Group -> iscsi-sr: $iscsi_sr"
-	for vg in ${VG_LIST[@]}
-	do
-		if [ "$vg" = "$iscsi_sr" ]
-		then
-			echo "Volume Group for iSCSI-SR found OK: $vg"
-			SR_OK=1
-			break
-		else
-			SR_OK=0
-		fi
-	done
 
-	if [ "$SR_OK" = "0" ]
-	then
-		echo "Volume Group for iSCSI-SR $iscsi_sr not found - attemping to re-plug"
-		replug_pbd $iscsi_sr $THIS_HOST_UUID
-		if [ $? -eq 1 ]
-		then
-			RETURN=1
-		fi
-	fi
+# Initialize return status
+RETURN=0
+
+# Loop through each iSCSI SR in the list
+for iscsi_sr in "${ISCSI_SR_LIST[@]}"; do
+  echo "Scanning for Volume Group -> iscsi-sr: $iscsi_sr"
+
+  # Flag to track if the Volume Group is found
+  SR_OK=0
+
+  # Check if the Volume Group exists for the current iSCSI SR
+  for vg in "${VG_LIST[@]}"; do
+    if [ "$vg" = "$iscsi_sr" ]; then
+      echo "Volume Group for iSCSI-SR found OK: $vg"
+      SR_OK=1
+      break
+    fi
+  done
+
+  # If Volume Group was not found, attempt to re-plug the PBD
+  if [ "$SR_OK" -eq 0 ]; then
+    echo "Volume Group for iSCSI-SR $iscsi_sr not found - attempting to re-plug"
+
+    # Call the replug_pbd function and check the return status
+    if ! replug_pbd "$iscsi_sr" "$THIS_HOST_UUID"; then
+      RETURN=1
+    fi
+  fi
 done
 
-if [ "$RETURN" = "1" ]
-then
-	exit 1
-else
-	exit 0
-fi
-
+# Exit with appropriate status based on the result
+exit "$RETURN"
