@@ -158,7 +158,7 @@ if [ "$STATE" = "master" ] || [ "$SET_ARG1" = "become_primary" ] && [ "$SET_ARG1
   # condition which delays storage init
   ###################################
   if [ "$NEW_COUNT" -gt 5 ]; then
-    (auto_plug_pbd && "$TIMEOUT" 10 /etc/iscsi-ha/scripts/replug_pbd --silent) &
+    (auto_plug_pbd && "$TIMEOUT" 10 /usr/libexec/iscsi-ha/replug_pbd --silent) &
   fi
 
   #######################################
@@ -457,7 +457,7 @@ if [[ $STATE == slave* ]] || [ "$SET_ARG1" = "become_secondary" ]; then
   # Make sure there is a VG for each
   # lvm over iscsi SR
   #######################################
-  $TIMEOUT 10 /etc/iscsi-ha/scripts/replug_pbd --silent &
+  $TIMEOUT 10 /usr/libexec/iscsi-ha/replug_pbd --silent &
 
   ########################################
   # 1- Make sure Virtual IP is NOT running here
