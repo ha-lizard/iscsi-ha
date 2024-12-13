@@ -29,7 +29,7 @@ CONFIG_EXEC=/etc/iscsi-ha/scripts/config_manager
 
 source /etc/iscsi-ha/iscsi-ha.init
 source /etc/iscsi-ha/iscsi-ha.conf
-source /etc/iscsi-ha/iscsi-ha.func
+source /usr/lib64/iscsi-ha/iscsi-ha.func
 
 #################################
 # Function get retrieves all
