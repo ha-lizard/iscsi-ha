@@ -53,7 +53,7 @@ xapi_init_check() {
 # Description: Ensure firewall is operational and replication network rule is active.
 #########################################
 fw_init_check() {
-  /etc/iscsi-ha/scripts/fw_init
+  /usr/libexec/iscsi-ha/fw_init
   return $?
 }
 
