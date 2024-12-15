@@ -1,171 +1,142 @@
 #!/bin/bash
 #################################################################################
-#                                                                               #
-# iscsi-ha - High Availability framework for iSCSI cluster used in conjunction  #
-# with XAPI based Xen Virtualization Environment (Xen Cloud Platform/XenServer) #
+# iscsi-ha - High Availability framework for iSCSI cluster                     #
+# Used with XAPI-based Xen Virtualization Environment                          #
 # Copyright 2024 Salvatore Costantino                                           #
 # ha@ixi0.com                                                                   #
 #                                                                               #
-#                                                                               #
-#    iscsi-ha is free software: you can redistribute it and/or modify           #
-#    it under the terms of the GNU General Public License as published by       #
-#    the Free Software Foundation, either version 3 of the License, or          #
-#    (at your option) any later version.                                        #
-#                                                                               #
-#    iscsi-ha is distributed in the hope that it will be useful,                #
-#    but WITHOUT ANY WARRANTY; without even the implied warranty of             #
-#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the              #
-#    GNU General Public License for more details.                               #
-#                                                                               #
-#    You should have received a copy of the GNU General Public License          #
-#    along with iscsi-ha.  If not, see <http://www.gnu.org/licenses/>.          #
-#                                                                               #
+# Licensed under the GNU General Public License, version 3 or later.           #
 #################################################################################
-source /etc/iscsi-ha/iscsi-ha.conf
+# shellcheck source=/dev/null
+# Load configuration file
+source /etc/iscsi-ha/iscsi-ha.conf || {
+  echo "Error: Unable to source configuration file /etc/iscsi-ha/iscsi-ha.conf" >&2
+  exit 1
+}
+
+# Variables
 FW_CHAIN_NAME='RH-Firewall-1-INPUT'
 IPTABLES_CONF='/etc/sysconfig/iptables'
 
-function log ()
-{
-	if [ $(ps -o comm= $PPID) != "iscsi-ha" ]
-	then
-		#were are running from shell
-		if [[ "$1" == Waiting* ]]
-		then
-			echo -ne "$1"
-		else
-			echo "$1"
-		fi
-	else
-		#we were called by ! shell
-		logger -t iscsi-ha "$1"
-	fi
+# Log function for output to console or syslog
+log() {
+  local message="$1"
+  local parent_process
+  parent_process=$(ps -o comm= "${PPID}")
+
+  if [ "$parent_process" != "iscsi-ha" ]; then
+    if [[ "$message" == Waiting* ]]; then
+      echo -ne "$message"
+    else
+      echo "$message"
+    fi
+  else
+    # we were called by ! shell
+    logger -t iscsi-ha "$message"
+  fi
 }
 
-##################################
-# Backward compatibility with
-# pre ver 7 hosts using SystemV
-###################################
-which systemctl &>/dev/null
-RETVAL=$?
-if [ $RETVAL -ne 0 ]
-then
-	log "SystemV host detected. Setting Alias for systemctl"
-	function systemctl ()
-	{
-		if [ "$1" = "is-enabled" ]
-		then
-			echo "enabled"
-		else
-			service $2 $1
-			return $?
-		fi
-	}
+# Check if systemctl is available, fallback to SystemV if not
+if ! command -v systemctl &>/dev/null; then
+  log "SystemV host detected. Setting alias for systemctl."
+
+  # Alias function for systemctl compatibility
+  systemctl() {
+    if [ "$1" = "is-enabled" ]; then
+      echo "enabled"
+    else
+      service "$2" "$1"
+    fi
+  }
 fi
 
-function exit_with_error ()
-{
-	log "$1"
-	exit 1
+# Exit with error message
+exit_with_error() {
+  log "$1"
+  exit 1
 }
 
+# Check required dependencies
 REQUIRED=(iptables awk)
-
-for i in ${REQUIRED[@]}
-do
-	which $i &>/dev/null || exit_with_error "Missing dependency [$i]"
+for cmd in "${REQUIRED[@]}"; do
+  if ! command -v "$cmd" &>/dev/null; then
+    exit_with_error "Missing dependency: [$cmd]"
+  fi
 done
 
-############################
-## Make sure FW is running
-## before executing in case
-## we are still booting
-############################
+# Ensure the firewall is running before executing in case we are still booting
 COUNT=600
 FW_LIVE=false
-FW_ENABLED_RESULT=$(systemctl is-enabled iptables)
+FW_ENABLED_RESULT=$(systemctl is-enabled iptables || echo "disabled")
 
-while [ $COUNT -gt 0 ]
-do
-	systemctl status iptables &> /dev/null
-	RETVAL=$?
-	if [ $RETVAL -ne 0 ]
-	then
-		log "Waiting for firewall to start. Attempt [$COUNT] \r"
-		COUNT=$(( $COUNT - 1 ))
-		sleep 1
-		
-		if [ "$FW_ENABLED_RESULT" = "disabled" ]
-		then
-			log "FW is disabled - exiting                                 "
-			exit 0
-		fi
-	else
-		FW_LIVE=true	
-		break
-	fi
+while [ $COUNT -gt 0 ]; do
+  if ! systemctl status iptables &>/dev/null; then
+    log "Waiting for firewall to start. Attempt [$COUNT]\r"
+    COUNT=$((COUNT - 1))
+    sleep 1
+
+    if [ "$FW_ENABLED_RESULT" = "disabled" ]; then
+      log "Firewall is disabled - exiting."
+      exit 0
+    fi
+  else
+    FW_LIVE=true
+    break
+  fi
 done
 
-if [ "${FW_LIVE}" = "false" ]
-then
-	log "Something is wrong - attempting to start FW"
-	systemctl start iptables &> /dev/null || exit_with_error "Failed to start FW"
+if [ "$FW_LIVE" = false ]; then
+  log "Something is wrong - attempting to start firewall."
+  systemctl start iptables &>/dev/null || exit_with_error "Failed to start firewall."
 else
-	log "Firewall running OK - continue"
-fi	
-
-##########################
-## Validate chain exists
-##########################
-iptables --list ${FW_CHAIN_NAME} &>/dev/null
-RETVAL=$?
-if [ $RETVAL -ne 0 ]
-then
-	log "Expected FW chain [${FW_CHAIN_NAME}] missing - switching to best effort for inserting replication rule"
-	#########################################################
-	## ONLY APPLIES IF CITRIX MAKES A CHANGE TO DEFAULT CHAIN
-	## Some logic to capture chain name changes that
-	## are out of our control. Best effort method tries
-	## to get chain name for a rule opening port 443.
-	#########################################################
-	ALT_CHAIN=$(cat ${IPTABLES_CONF} | grep 443 | awk {'print $2'})
-	if [ ${#ALT_CHAIN} -gt 0 ]
-	then
-		FW_CHAIN_NAME=${ALT_CHAIN}
-	else
-		exit_with_error "Cannot reliably determine FW rules chain - aborting"	
-	fi
+  log "Firewall is running - continuing."
 fi
 
-REPLICATION_SUBNET="$(echo $DRBD_VIRTUAL_IP | awk -F '.' {'print $1"."$2"."$3"."'})0/24"
-FW_RULE_POSITION=$(iptables -L ${FW_CHAIN_NAME} --line-numbers | grep 'reject-with' | awk '{print $1}')
-FW_RULE_CHECK="A ${FW_CHAIN_NAME} -s ${REPLICATION_SUBNET} -j ACCEPT"
+# Validate that the chain exists in the firewall
+if ! iptables --list "$FW_CHAIN_NAME" &>/dev/null; then
+  log "Expected firewall chain [$FW_CHAIN_NAME] missing - switching to best effort."
+
+  # Attempt to determine chain name dynamically
+  #########################################################
+  ## ONLY APPLIES IF CITRIX MAKES A CHANGE TO DEFAULT CHAIN
+  ## Some logic to capture chain name changes that
+  ## are out of our control. Best effort method tries
+  ## to get chain name for a rule opening port 443.
+  #########################################################
+  ALT_CHAIN=$(grep 443 "$IPTABLES_CONF" | awk '{print $2}')
+  if [ -n "$ALT_CHAIN" ]; then
+    FW_CHAIN_NAME="$ALT_CHAIN"
+  else
+    exit_with_error "Cannot reliably determine firewall rules chain - aborting."
+  fi
+fi
+
+# Configure replication subnet
+REPLICATION_SUBNET=$(echo "$DRBD_VIRTUAL_IP" | awk -F '.' '{print $1"."$2"."$3"."0"/24"}')
+FW_RULE_POSITION=$(iptables -L "$FW_CHAIN_NAME" --line-numbers | grep 'reject-with' | awk '{print $1}')
+FW_RULE_CHECK="-A $FW_CHAIN_NAME -s $REPLICATION_SUBNET -j ACCEPT"
 FW_RULE_MATCHES=$(iptables-save | grep -c "$FW_RULE_CHECK")
-log "Checking for existing FW RULE [$FW_RULE_CHECK]"
-log "FW rule matches found =  [$FW_RULE_MATCHES]"
-if [ $FW_RULE_MATCHES -gt 0 ]
-then
-	log "An active FW rule is in place already"
-	
-	if [ "$1" -a "$1" = "--save" ]
-	then
-		service iptables save &> /dev/null || exit_with_error "Failed to save FW rule"
-	fi
-	log "Successfully saved replication network [$REPLICATION_SUBNET] FW rule"
-	exit 0
+
+log "Checking for existing firewall rule: [$FW_RULE_CHECK]"
+log "Firewall rule matches found: [$FW_RULE_MATCHES]"
+
+if [ "$FW_RULE_MATCHES" -gt 0 ]; then
+  log "An active firewall rule is already in place."
+  if [ "$1" = "--save" ]; then
+    service iptables save &>/dev/null || exit_with_error "Failed to save firewall rule."
+  fi
+  log "Successfully saved replication network [$REPLICATION_SUBNET] firewall rule."
+  exit 0
 fi
 
-iptables -I RH-Firewall-1-INPUT $FW_RULE_POSITION -s $REPLICATION_SUBNET -j ACCEPT
-RETVAL=$?
-if [ $RETVAL -eq 0 ]
-then
-	log "Successfully loaded replication network [$REPLICATION_SUBNET] FW rule"
-	if [ "$1" -a "$1" = "--save" ]
-	then
-		service iptables save &> /dev/null || exit_with_error "Failed to save FW rule"
-	fi
-	log "Successfully saved replication network [$REPLICATION_SUBNET] FW rule"
-	exit 0
+# Insert the firewall rule
+if iptables -I "$FW_CHAIN_NAME" "$FW_RULE_POSITION" -s "$REPLICATION_SUBNET" -j ACCEPT; then
+  log "Successfully loaded replication network [$REPLICATION_SUBNET] firewall rule."
+  if [ "$1" = "--save" ]; then
+    service iptables save &>/dev/null || exit_with_error "Failed to save firewall rule."
+  fi
+  log "Successfully saved replication network [$REPLICATION_SUBNET] firewall rule."
+  exit 0
 else
-	exit_with_error "Failed to load replication network [$REPLICATION_SUBNET] FW rule"
+  exit_with_error "Failed to load replication network [$REPLICATION_SUBNET] firewall rule."
 fi
