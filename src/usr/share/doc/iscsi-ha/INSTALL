@@ -1,0 +1,48 @@
+#################################################################################
+#                                                                               #
+# iscsi-ha - High Availability framework for iSCSI cluster used in conjunction  #
+# with XAPI based Xen Virtualization Environment (Xen Cloud Platform/XenServer) #
+# Copyright 2024 Salvatore Costantino                                           #
+# ha@ixi0.com                                                                   #
+#                                                                               #
+#                                                                               #
+#    iscsi-ha is free software: you can redistribute it and/or modify           #
+#    it under the terms of the GNU General Public License as published by       #
+#    the Free Software Foundation, either version 3 of the License, or          #
+#    (at your option) any later version.                                        #
+#                                                                               #
+#    iscsi-ha is distributed in the hope that it will be useful,                #
+#    but WITHOUT ANY WARRANTY; without even the implied warranty of             #
+#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the              #
+#    GNU General Public License for more details.                               #
+#                                                                               #
+#    You should have received a copy of the GNU General Public License          #
+#    along with iscsi-ha.  If not, see <http://www.gnu.org/licenses/>.          #
+#                                                                               #
+#################################################################################
+
+Installing - replace <VERSION> with the distribution version number
+-	Copy the source tarball into a temporary location (ex.  /tmp/)
+
+-	Extract its contents and move into the extracted folder
+	tar .zxvf iscsi-ha-<VERSION>.tgz
+
+-	Move into the scripts folder
+	cd iscsi-ha-<VERSION>/scripts
+
+-	Run the installer
+	./install
+
+The installer will check if sendmail and mailx packages are installed on the server.
+These are only required for email alerts. Skip the installation of these packages if email alerting is not required.
+
+Removing
+An uninstall script is provided for Centos based systems. This will completely remove all components from the host.
+
+-	Move into the scripts folder
+	cd /etc/iscsi-ha/scripts/
+
+- 	Run the uninstaller
+	./uninstall
+
+-	follow the steps to uninstall
