@@ -1,4 +1,5 @@
 #!/bin/bash
+# shellcheck source=/dev/null
 #################################################################################
 #                                                                               #
 # iscsi-ha - High Availability framework for iSCSI cluster used in conjunction  #
@@ -24,72 +25,71 @@
 source /etc/iscsi-ha/iscsi-ha.conf
 source /etc/iscsi-ha/iscsi-ha.load
 source /etc/iscsi-ha/iscsi-ha.func
-ISCSI_TARGET_SERVICE=$(basename $ISCSI_TARGET_SERVICE)
 
-if [ -e $IHA_STATE_PATH/manual ]
-then
-	if [ "$(cat $IHA_STATE_PATH/manual)" = "become_secondary" ]
-	then
-		EXPECTED_TARGET_STATE='[expected stopped]'
-		EXPECTED_DRBD_STATE='[expected secondary]'
-		EXPECTED_REPLCIATION_IP="[${DRBD_VIRTUAL_IP} not expected here]"
-	elif [ "$(cat $IHA_STATE_PATH/manual)" = "become_primary" ]
-	then
-		EXPECTED_TARGET_STATE='[expected running]'
-		EXPECTED_DRBD_STATE='[expected primary]'
-		EXPECTED_REPLCIATION_IP="[${DRBD_VIRTUAL_IP} expected here]"
-	else
-		EXPECTED_TARGET_STATE='[Error]'
-	fi
-	service_execute $ISCSI_TARGET_SERVICE status > /dev/null
-	RETVAL=$?
-	if [ $RETVAL -eq 0 ]
-	then
-		ISCSI_TARGET_STATUS=Running
-	else
-		ISCSI_TARGET_STATUS=Stopped
-	fi
-	make_box "iscsi-ha is in manual mode - current status shown below"
-	echo "Storage role:   `drbdadm role all | awk -F '/' {'print $1'}` ${EXPECTED_DRBD_STATE}"
-	echo "Replication IP: "`ip -4 addr show $DRBD_INTERFACE | grep inet | awk {'print $2'}`" ${EXPECTED_REPLCIATION_IP}"
-	echo "iSCSI target:	${ISCSI_TARGET_STATUS} ${EXPECTED_TARGET_STATE}"
-	exit 0
+ISCSI_TARGET_SERVICE=$(basename "$ISCSI_TARGET_SERVICE")
+
+if [ -f "$IHA_STATE_PATH/manual" ]; then
+  case "$(cat "$IHA_STATE_PATH/manual")" in
+  become_secondary)
+    EXPECTED_TARGET_STATE='[expected stopped]'
+    EXPECTED_DRBD_STATE='[expected secondary]'
+    EXPECTED_REPLICATION_IP="[${DRBD_VIRTUAL_IP} not expected here]"
+    ;;
+  become_primary)
+    EXPECTED_TARGET_STATE='[expected running]'
+    EXPECTED_DRBD_STATE='[expected primary]'
+    EXPECTED_REPLICATION_IP="[${DRBD_VIRTUAL_IP} expected here]"
+    ;;
+  *)
+    EXPECTED_TARGET_STATE='[Error]'
+    ;;
+  esac
+
+  service_execute "$ISCSI_TARGET_SERVICE" status >/dev/null
+  RETVAL=$?
+  if [ $RETVAL -eq 0 ]; then
+    ISCSI_TARGET_STATUS=Running
+  else
+    ISCSI_TARGET_STATUS=Stopped
+  fi
+  make_box "iscsi-ha is in manual mode - current status shown below"
+  echo "Storage role:   $(drbdadm role all | awk -F '/' '{print $1}') ${EXPECTED_DRBD_STATE}"
+  echo "Replication IP: $(ip -4 addr show "$DRBD_INTERFACE" | grep inet | awk '{print $2}') ${EXPECTED_REPLICATION_IP}"
+  echo "iSCSI target:	${ISCSI_TARGET_STATUS} ${EXPECTED_TARGET_STATE}"
+  exit 0
 fi
 
-if [ -e $STATUS ]
-then
-	while :
-	do
-		NOW=`date '+%s'`
-		LAST_LOAD=`stat -c '%Y' $STATUS`
-		DELTA=$(( $NOW - $LAST_LOAD ))
-		TOLERANCE=$(( $MONITOR_DELAY + 5 ))
-		if [ $DELTA -gt $TOLERANCE ]
-		then
-			clear
-			date
-			echo -e "##########################################################"
-			echo -e "## iSCSI-ha Status cache is more than $DELTA seconds old"
-			echo -e "## Tolerance = $TOLERANCE seconds. Check status"
-			echo -e "##########################################################\r\n"	
-			echo -e "Possible causes: 1) iSCSI-HA is actively failing over to standby host"
-			echo -e "                    this can take up to 60 seconds or more depending on settings\r\n"
-			echo -e "                 2) Service is not running. try 'service iscsi-ha status' to check running status"
-			echo -e "                    If the service is not running, try 'service iscsi-ha start -w' to start the service"
-			echo -e "\r\nControl + C to exit"
-			sleep 1
-		else
-			clear
-			make_box "iSCSI-HA Version $VERSION
-`date`"
- 
-			CONTENTS=`expand /etc/iscsi-ha/state/status`
-			make_box "$CONTENTS"
-			echo "Control + C to exit"
-			echo -e "\r\n"
-			make_box "DRBD Status"
-			make_box "`cat /proc/drbd`"
-			sleep 2
-		fi
-	done
+if [ -f "$STATUS" ]; then
+  while true; do
+    NOW=$(date '+%s')
+    LAST_LOAD=$(stat -c '%Y' "$STATUS")
+    DELTA=$((NOW - LAST_LOAD))
+    TOLERANCE=$((MONITOR_DELAY + 5))
+    if [ $DELTA -gt $TOLERANCE ]; then
+      clear
+      date
+      echo -e "##########################################################"
+      echo -e "## iSCSI-ha Status cache is more than $DELTA seconds old"
+      echo -e "## Tolerance = $TOLERANCE seconds. Check status"
+      echo -e "##########################################################\r\n"
+      echo -e "Possible causes: 1) iSCSI-HA is actively failing over to standby host"
+      echo -e "                    this can take up to 60 seconds or more depending on settings\r\n"
+      echo -e "                 2) Service is not running. try 'service iscsi-ha status' to check running status"
+      echo -e "                    If the service is not running, try 'service iscsi-ha start -w' to start the service"
+      echo -e "\r\nControl + C to exit"
+      sleep 1
+    else
+      clear
+      make_box "iSCSI-HA Version __VERSION__
+$(date)"
+
+      CONTENTS=$(expand /etc/iscsi-ha/state/status)
+      make_box "$CONTENTS"
+      echo "Control + C to exit"
+      echo -e "\r\n"
+      make_box "DRBD Status"
+      make_box "$(cat /proc/drbd)"
+      sleep 2
+    fi
+  done
 fi
