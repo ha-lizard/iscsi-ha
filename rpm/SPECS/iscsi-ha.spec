@@ -82,7 +82,7 @@ fi
 
 # TODO: Update installation version
 # BUG: This generate a error when the system is not connected to internet
-#/etc/iscsi-ha/scripts/post_version.py IHA-__VERSION__-__RELEASE__
+#/usr/libexec/iscsi-ha/post_version.py IHA-__VERSION__-__RELEASE__
 
 echo "iscsi-ha setup complete."
 

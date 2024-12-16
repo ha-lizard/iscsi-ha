@@ -1,5 +1,7 @@
 #!/bin/bash
 
+# TODO: looks like this script are not used anymore
+
 # shellcheck source=/dev/null
 # Source the configuration file for iscsi-ha
 source /etc/iscsi-ha/iscsi-ha.load
@@ -21,9 +23,9 @@ while :; do
   echo -ne "Attempt [$RETRY] to become primary storage role with infinite attempts\r"
 
   # Attempt to become primary
-  if /etc/iscsi-ha/scripts/iscsi-cfg become-primary &>/dev/null; then
+  if /usr/bin/iscsi-cfg become-primary &>/dev/null; then
     # Check the status and break the loop if successful
-    if /etc/iscsi-ha/scripts/iscsi-cfg status; then
+    if /usr/bin/iscsi-cfg status; then
       break
     fi
   fi

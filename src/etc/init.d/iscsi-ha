@@ -20,7 +20,7 @@ EXECUTE_PID_FILE="/var/run/${EXECUTE_NAME}.pid"
 GLOBAL_CONF="/etc/iscsi-ha/iscsi-ha.load"
 OVERRIDE_CONF="/etc/iscsi-ha/iscsi-ha.conf"
 CALLED_BY="$(ps -o comm= "$PPID")"
-THIS_HOST_UUID_FILE="/etc/ha-lizard/state/local_host_uuid"
+THIS_HOST_UUID_FILE="/var/lib/ha-lizard/state/local_host_uuid"
 
 # Source configuration files
 [ -f "$GLOBAL_CONF" ] && source "$GLOBAL_CONF"
@@ -107,15 +107,15 @@ start() {
 
   case "$MANUAL_MODE_LIST" in
   *"${THIS_HOST_UUID}=enable"*)
-    echo "" >/etc/iscsi-ha/state/manual
+    echo "" >/var/lib/iscsi-ha/state/manual
     logger -t "${PROC_NAME}-init" "Starting in manual mode"
     ;;
   *"${THIS_HOST_UUID}=primary"*)
-    echo "become_primary" >/etc/iscsi-ha/state/manual
+    echo "become_primary" >/var/lib/iscsi-ha/state/manual
     logger -t "${PROC_NAME}-init" "Starting as primary node in manual mode"
     ;;
   *"${THIS_HOST_UUID}=secondary"*)
-    echo "become_secondary" >/etc/iscsi-ha/state/manual
+    echo "become_secondary" >/var/lib/iscsi-ha/state/manual
     logger -t "${PROC_NAME}-init" "Starting as secondary node in manual mode"
     ;;
   esac

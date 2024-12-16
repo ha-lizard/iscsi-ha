@@ -28,6 +28,6 @@ source /etc/iscsi-ha/iscsi-ha.func
 alert_body="DRBD split-brain detected from host $(hostname). \
 This is not a cluster split-brain condition and is limited only \
 to the DRBD replication engine. \
-Use script /etc/iscsi-ha/scripts/drbd-sb-tool to restore storage replication"
+Use script /usr/libexec/iscsi-ha/drbd-sb-tool to restore storage replication"
 
 raise_alert "DRBD Split Brain Detected" "$alert_body" "1"

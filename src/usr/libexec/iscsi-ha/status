@@ -83,7 +83,7 @@ if [ -f "$STATUS" ]; then
       make_box "iSCSI-HA Version __VERSION__
 $(date)"
 
-      CONTENTS=$(expand /etc/iscsi-ha/state/status)
+      CONTENTS=$(expand /var/lib/iscsi-ha/state/status)
       make_box "$CONTENTS"
       echo "Control + C to exit"
       echo -e "\r\n"

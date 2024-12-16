@@ -24,8 +24,8 @@
 #exec 2>/dev/null
 CONF=/etc/iscsi-ha/iscsi-ha.conf
 ENVIRO=/etc/iscsi-ha/iscsi-ha.init
-STATUS_EXEC=/etc/iscsi-ha/scripts/status
-CONFIG_EXEC=/etc/iscsi-ha/scripts/config_manager
+STATUS_EXEC=//usr/libexec/iscsi-ha/status
+CONFIG_EXEC=/usr/libexec/iscsi-ha/config_manager
 
 source /etc/iscsi-ha/iscsi-ha.init
 source /etc/iscsi-ha/iscsi-ha.conf
@@ -310,7 +310,7 @@ function insert() {
       echo "Inserting [$PREFIX$PARAM=$VALUE]"
     fi
 
-  done </etc/iscsi-ha/scripts/install.params
+  done </etc/iscsi-ha/install.params
 } # End function insert
 
 ##################################
