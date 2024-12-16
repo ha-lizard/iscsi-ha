@@ -1,0 +1,123 @@
+.\" Manpage for iscsi-cfg
+.TH ISCSI-CFG 8 "December 2024" "__VERSION__" "iSCSI-HA User Commands"
+.SH NAME
+iscsi-cfg \- High Availability framework for iSCSI cluster in Xen Virtualization
+.SH SYNOPSIS
+.B iscsi-cfg
+[\fIaction\fR]
+
+.SH DESCRIPTION
+iscsi-cfg is a command line tool for managing high availability (HA) for iSCSI clusters
+used in conjunction with XAPI-based Xen Virtualization Environments (such as Xen Cloud
+Platform/XenServer).
+
+It interacts with iscsi-ha, a high availability framework for iSCSI-based storage in a
+XenServer or Xen Cloud Platform setup. The tool can be used to enable manual mode, switch
+between primary and secondary roles, and configure the system for high availability
+during rolling updates or server reboots.
+
+.SH OPTIONS
+The following actions are available for iscsi-cfg:
+
+.TP
+.B backup
+Backs up the necessary configuration files, such as lvm, drbd, tgt, and iptables, to the
+pool database. Useful for restoring configuration after upgrades.
+
+.TP
+.B become-primary
+Manually promotes the host to the primary role, overriding its current state in the pool
+master/slave structure. Only works when in manual mode.
+
+.TP
+.B become-secondary
+Manually demotes the host to the secondary role, overriding its current state in the pool
+master/slave structure. Only works when in manual mode.
+
+.TP
+.B get
+Lists all iSCSI-HA configuration parameters.
+
+.TP
+.B insert
+Inserts the necessary parameters into the database, often used to repair broken
+installations or database mappings.
+
+.TP
+.B log
+Displays the real-time output of the iSCSI-HA log. Press Ctrl+C to exit.
+
+.TP
+.B manual-mode-disable
+Exits manual mode and reverts to automatic role selection by iscsi-ha.
+
+.TP
+.B manual-mode-enable
+Enters manual mode. This is required to manually select roles and perform manual actions,
+such as moving the iSCSI target to a different host. Useful for performing rolling updates
+without VM downtime.
+
+.TP
+.B restore
+Restores the configuration files and parameters from the pool database to the runtime
+environment after a dom0 upgrade or any other change that may erase the configuration.
+
+.TP
+.B status
+Displays the current operational status of iSCSI-HA, including the state of relevant
+applications.
+
+.TP
+.B \-v
+Displays the current version of iscsi-cfg.
+
+.SH CONFIGURATION FILES
+iscsi-cfg uses the following configuration files:
+
+.TP
+.B /etc/iscsi-ha/iscsi-ha.conf
+Configuration file containing iSCSI-HA parameters.
+
+.TP
+.B /etc/iscsi-ha/iscsi-ha.init
+Initialization file used by iscsi-ha.
+
+.TP
+.B /usr/libexec/iscsi-ha/status
+Script used to check the running status of iSCSI-HA.
+
+.TP
+.B /usr/libexec/iscsi-ha/config_manager
+Script for managing iSCSI-HA configuration.
+
+.SH EXAMPLES
+Example 1: Entering manual mode
+.PP
+To enter manual mode and begin manually managing the iSCSI HA roles:
+.nf
+iscsi-cfg manual-mode-enable
+.fi
+
+Example 2: Displaying the current status
+.PP
+To check the current status of iSCSI-HA:
+.nf
+iscsi-cfg status
+.fi
+
+Example 3: Promoting the current host to the primary role
+.PP
+To manually promote the current host to the primary role:
+.nf
+iscsi-cfg become-primary
+.fi
+
+.SH AUTHOR
+Written by Salvatore Costantino, <ha@ixi0.com>
+
+.SH LICENSE
+This program is free software; you can redistribute it and/or modify it under the terms
+of the GNU General Public License as published by the Free Software Foundation; either
+version 3 of the License, or (at your option) any later version.
+.SH SEE ALSO
+.Xref _iscsi-ha(8)
