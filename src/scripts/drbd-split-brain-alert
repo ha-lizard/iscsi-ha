@@ -1,10 +1,11 @@
 #!/bin/bash
+# shellcheck source=/dev/null
 #################################################################################
 #                                                                               #
 # iscsi-ha - High Availability framework for iSCSI cluster used in conjunction  #
 # with XAPI based Xen Virtualization Environment (Xen Cloud Platform/XenServer) #
 # Copyright 2024 Salvatore Costantino                                           #
-# ha@ixi0.com                                                                   #  
+# ha@ixi0.com                                                                   #
 #                                                                               #
 #                                                                               #
 #    iscsi-ha is free software: you can redistribute it and/or modify           #
@@ -23,9 +24,10 @@
 #################################################################################
 
 source /etc/iscsi-ha/iscsi-ha.func
-ALERT_BODY="DRBD split-brain detected from host $(hostname). \
+
+alert_body="DRBD split-brain detected from host $(hostname). \
 This is not a cluster split-brain condition and is limited only \
 to the DRBD replication engine. \
-Use script /etc/iscsi-ha/scripts/drbd-sb-tool to retore storage replication"
+Use script /etc/iscsi-ha/scripts/drbd-sb-tool to restore storage replication"
 
-raise_alert "DRBD Split Brain Detected" "$ALERT_BODY" "1"
+raise_alert "DRBD Split Brain Detected" "$alert_body" "1"
