@@ -565,38 +565,72 @@ update_firewall
 # Identify the local block device
 # to be used for HA-Lizard HA storage
 ####################################
-make_box "Convert local storage to iSCSI-HA storage? <yes or no>"
-read USE_LOCAL
 
-if [ "$USE_LOCAL" = "yes" ]; then
-  remove_local_storage
-  if [ $? -eq 0 ]; then
-    BLOCK_DEVICE=$(readlink -f $THIS_HOST_LOCAL_STORAGE_PBD_DEVICE)
+# Function to prompt for block device input
+get_block_device_input() {
+  local prompt_message="$1"
+  make_box "$prompt_message"
+  read -r block_device
+  echo "$block_device"
+}
+
+# Function to handle the process of selecting a block device
+#
+# This function prompts the user to select a block device for HA storage.
+# If the user chooses to convert local storage to iSCSI-HA storage, it
+# calls the remove_local_storage function to perform the conversion and
+# retrieves the block device path. If the conversion fails, it prompts the
+# user to enter the block device path manually. If the user chooses not to
+# convert local storage, it prompts the user to enter the block device path
+# manually.
+#
+# This function modifies the global variable BLOCK_DEVICE by setting it
+# to the selected block device path.
+#
+# Parameters: none
+#
+# Returns: none
+select_block_device() {
+  # Prompt for the choice to use local storage
+  make_box "Convert local storage to iSCSI-HA storage? <yes or no>"
+  read -r USE_LOCAL
+
+  # Handle the user input for local storage selection
+  if [ "$USE_LOCAL" = "yes" ]; then
+    # Try to convert the local storage to HA storage
+    if remove_local_storage; then
+      # If the conversion is successful, retrieve the block device path
+      BLOCK_DEVICE=$(readlink -f "$THIS_HOST_LOCAL_STORAGE_PBD_DEVICE")
+    else
+      # Prompt the user to enter the block device path manually
+      BLOCK_DEVICE=$(get_block_device_input "
+Error converting local SR to usable block device.
+Enter full path to backing block device to be used for HA storage
+(ex. /dev/sdb)")
+    fi
+
+  elif [ "$USE_LOCAL" = "no" ]; then
+    # Prompt the user to enter the block device path manually
+    BLOCK_DEVICE=$(get_block_device_input "
+Enter full path to backing block device to be used for HA storage
+(ex. /dev/sdb)")
+
   else
-    make_box "Error converting local SR to usable block device
-Enter full path to backing block device to be
-used for HA storage and press <Enter> (ex. /dev/sdb)"
-    read BLOCK_DEVICE
-  fi
-
-elif [ "$USE_LOCAL" = "no" ]; then
-  make_box "Enter full path to backing block device to be
-	used for HA storage and press <Enter> (ex. /dev/sdb)"
-  read BLOCK_DEVICE
-else
-  echo "Invalid entry - exiting"
-  exit 1
-fi
-if [ $BLOCK_DEVICE ]; then
-  if [ ! -e $BLOCK_DEVICE ]; then
-    echo "Block device - invalid path! Exiting.."
+    # Handle invalid input
+    echo "Invalid entry - exiting"
     exit 1
   fi
-else
-  echo "Block device not specified! Exiting.."
-  exit 1
-fi
-echo -e "Backing block device set to $BLOCK_DEVICE\r\n"
+
+  # Validate the block device path
+  if [ -z "$BLOCK_DEVICE" ] || [ ! -e "$BLOCK_DEVICE" ]; then
+    # Handle invalid block device paths
+    echo "Error: Invalid block device! Either it is not specified or the path is invalid. Exiting.."
+    exit 1
+  fi
+
+  # Print the block device path
+  echo -e "Backing block device set to $BLOCK_DEVICE\r\n"
+}
 
 ###################################
 # Update LVM Filters - block LVM
