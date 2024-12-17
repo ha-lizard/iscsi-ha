@@ -341,16 +341,6 @@ else
   echo "Pool number of host validated"
 fi
 
-#####################################
-# Check for connection to internet
-#####################################
-wget -q --tries=10 --timeout=20 --spider $HALIZARD_MIRROR_URL
-if [ $? -ne 0 ]; then
-  echo "No internet access detected. An internet connection"
-  echo "is required to download the required components"
-  exit 1
-fi
-
 #######################################
 # Is this host Master or Slave
 #######################################
@@ -363,45 +353,6 @@ else
   echo "Check that you have a properly configured pool before continuing. Exiting.."
   exit 1
 fi
-
-#######################################
-# Create repos required for installing
-# DRBD init, DRBD userland tools, tgt
-#######################################
-echo '#######################
-## Base CentOS7 Repo ##
-#######################
-[ha-lizard-base]
-name=CentOS-$releasever - ha-lizard
-mirrorlist=http://mirrorlist.centos.org/?release=7&arch=$basearch&repo=os&infra=$infra
-baseurl=http://linuxsoft.cern.ch/centos-vault/centos/7/os/$basearch/
-enabled=0
-gpgcheck=0
-
-#######################
-## epel CentOS7 Repo ##
-#######################
-[ha-lizard-epel]
-name=Extra Packages for Enterprise Linux 7 - $basearch
-baseurl=https://fedora-archive.ip-connect.info/epel/7/$basearch
-mirrorlist=https://mirrors.fedoraproject.org/metalink?repo=epel-7&arch=$basearch
-failovermethod=priority
-enabled=0
-gpgcheck=0
-
-#########################
-## elrepo CentOS7 Repo ##
-#########################
-### Name: ELRepo.org Community Enterprise Linux Repository for el7
-### URL: http://elrepo.org/
-
-[ha-lizard-elrepo]
-name=ELRepo.org Community Enterprise Linux Repository - el7
-baseurl=http://ftp.scientificlinux.org/linux/elrepo/archive/elrepo/el7/$basearch/
-mirrorlist=http://mirrors.elrepo.org/mirrors-elrepo.el7
-enabled=0
-gpgcheck=0
-protect=0' >/etc/yum.repos.d/ha-lizard.repo
 
 #######################################
 # Declare default values for master
@@ -434,7 +385,7 @@ while [ $SUCCESS = false ]; do
 (leave blank to select default value of $REPLICATION_LOCAL_IP)"
   read REPLICATION_LOCAL_IP_OVERRIDE
   if [ $REPLICATION_LOCAL_IP_OVERRIDE ]; then
-    validate_ip $REPLICATION_LOCAL_IP_OVERRIDE >/dev/null
+    is_valid_ipv4 $REPLICATION_LOCAL_IP_OVERRIDE >/dev/null
     if [ $? -ne 0 ]; then
       echo "Invalid IP Address Specified !"
     else
@@ -464,7 +415,7 @@ while [ $SUCCESS = false ]; do
 (leave blank to select default value of $REPLICATION_REMOTE_IP)"
   read REPLICATION_REMOTE_IP_OVERRIDE
   if [ $REPLICATION_REMOTE_IP_OVERRIDE ]; then
-    validate_ip $REPLICATION_REMOTE_IP_OVERRIDE >/dev/null
+    is_valid_ipv4 $REPLICATION_REMOTE_IP_OVERRIDE >/dev/null
     if [ $? -ne 0 ]; then
       echo "Invalid IP Address Specified !"
     else
@@ -495,7 +446,7 @@ while [ $SUCCESS = false ]; do
 (leave blank to select default value of $REPLICATION_ISCSI_IP)"
   read REPLICATION_ISCSI_IP_OVERRIDE
   if [ $REPLICATION_ISCSI_IP_OVERRIDE ]; then
-    validate_ip $REPLICATION_ISCSI_IP_OVERRIDE >/dev/null
+    is_valid_ipv4 $REPLICATION_ISCSI_IP_OVERRIDE >/dev/null
     if [ $? -ne 0 ]; then
       echo "Invalid IP Address Specified !"
     else
@@ -563,33 +514,6 @@ else
 fi
 
 ######################################
-# Get Packages using the latest
-# version available on mirror
-######################################
-if [ -d $TMP_LOCATION ]; then
-  echo "Local temp folder $TMP_LOCATION found"
-else
-  echo "Creating temp folder $TMP_LOCATION"
-  mkdir $TMP_LOCATION
-fi
-
-cd $TMP_LOCATION
-echo "Downloading the latest stable version of HA-Lizard to $TMP_LOCATION"
-wget -q $HALIZARD_MIRROR_URL/ha-lizard/$HALIZARD_RPM_RELEASE
-
-echo "Downloading the latest stable version of iSCSI-HA to $TMP_LOCATION"
-wget -q $HALIZARD_MIRROR_URL/iscsi-ha/$ISCSIHA_RPM_RELEASE
-
-######################################
-# Unpack packages
-# DEPRECATED
-######################################
-#echo "Unpacking iSCSI-HA"
-#tar -zxvf $ISCSIHA_RELEASE >> $INSTALL_LOG
-#echo "Unpacking HA-Lizard"
-#tar -zxvf $HALIZARD_RELEASE >> $INSTALL_LOG
-
-######################################
 # Update firewall - allow hosts
 # on replication subnet
 ######################################
@@ -598,41 +522,6 @@ cp $IPTABLES_CONF $TMP_LOCATION/$INSTALL_UID/
 iptables -I RH-Firewall-1-INPUT $FW_RULE_POSITION -s $REPLICATION_SUBNET -j ACCEPT
 service iptables save
 service iptables restart
-
-######################################
-# Install DRBD using RPMs in iSCSI-HA
-# release. Set chkconfig to off
-######################################
-echo "Installing DRBD packages"
-yum install drbd84-utils --enablerepo=ha-lizard-elrepo -y >>$INSTALL_LOG
-yum install drbd84-utils-sysvinit --enablerepo=ha-lizard-elrepo -y >>$INSTALL_LOG
-
-chkconfig drbd off
-
-####################################
-# Install iSCSI Target Framework
-# and make sure it does not start
-# automatically
-####################################
-echo "Installing iSCSI Target Framework"
-yum install scsi-target-utils --enablerepo=ha-lizard-epel,ha-lizard-base -y >>$INSTALL_LOG
-systemctl disable tgtd
-
-#####################################
-# Install HA-Lizard
-#####################################
-echo "Installing HA-Lizard High Availability Component"
-sleep 2
-#$TMP_LOCATION/`basename $HALIZARD_RELEASE .tgz`/scripts/install --nostart >> $INSTALL_LOG
-rpm -Uvh $TMP_LOCATION/$HALIZARD_RPM_RELEASE
-
-#####################################
-# Install iSCSI-HA
-#####################################
-echo "Installing iSCSI-HA Storage High Availability Component"
-sleep 2
-#$TMP_LOCATION/`basename $ISCSIHA_RELEASE .tgz`/scripts/install --nostart >> $INSTALL_LOG
-rpm -Uvh $TMP_LOCATION/$ISCSIHA_RPM_RELEASE
 
 ####################################
 # Identify the local block device
@@ -754,7 +643,7 @@ while [ $SUCCESS = false ]; do
 This can be any IP address reachable by this host
 by traversing the XenServer management network and press <Enter>"
   read HEURISTIC_IP
-  validate_ip $HEURISTIC_IP >/dev/null
+  is_valid_ipv4 $HEURISTIC_IP >/dev/null
   if [ $? -ne 0 ]; then
     echo "Invalid IP Address Specified !"
   else
