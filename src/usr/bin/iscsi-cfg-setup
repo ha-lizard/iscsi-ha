@@ -743,149 +743,218 @@ ha-cfg set-quiet XAPI_DELAY 10
 # Setup/Copy DRBD configuration
 # Initialize DRBD
 ###################################
+# TODO: backup
 mv $DRBD_CONF_FILE ${DRBD_CONF_FILE}.backup # Backup any existing DRBD conf
+#!/bin/bash
 
 #####################################
-# Gather disk and replication link
-# performance metrics - used to
-# set DRBD sync speed
-# this is for initial sync and
-# resync speed only. DRBD replication
-# will always operate as fast as
-# the HW will support
+# This code configures DRBD (Distributed Replicated Block Device) sync speeds
+# by gathering and evaluating disk throughput and replication link performance
+# metrics. It helps determine the optimal sync speeds for initial synchronization
+# and resync operations.
+#
+# The script allows users to select the desired replication link speed from predefined
+# options (ranging from 100Mbps to 40Gbps) and disk throughput values. These selections
+# are used to calculate the appropriate DRBD sync rates for both maximum and minimum
+# transfer speeds (c-max-rate and c-min-rate), ensuring efficient data replication.
+#
+# This configuration is specifically designed for setting up DRBD replication
+# synchronization parameters and is not intended for ongoing replication performance
+# adjustments, which depend on the hardware's capabilities.
 #####################################
-declare -a LINK_SPEED_LIST
-LINK_SPEED_LIST[1]=100000000
-LINK_SPEED_LIST[2]=1000000000
-LINK_SPEED_LIST[3]=2000000000
-LINK_SPEED_LIST[4]=2500000000
-LINK_SPEED_LIST[5]=5000000000
-LINK_SPEED_LIST[6]=10000000000
-LINK_SPEED_LIST[7]=20000000000
-LINK_SPEED_LIST[8]=40000000000
 
-while :; do
-  echo "Select replication link speed"
-  echo "[1] 100Mbps"
-  echo "[2] 1Gbps"
-  echo "[3] 2Gbps"
-  echo "[4] 2.5Gbps"
-  echo "[5] 5Gbps"
-  echo "[6] 10Gbps"
-  echo "[7] 20Gbps"
-  echo "[8] 40Gbps"
+# Default scaling factor for c-min-rate
+C_MIN_RATE_SCALE_FACTOR=3
 
-  read LINK_SPEED_INDEX
-  if [ "$LINK_SPEED_INDEX" -ge 1 ] && [ "$LINK_SPEED_INDEX" -le 8 ]; then
-    LINK_SPEED=${LINK_SPEED_LIST[$LINK_SPEED_INDEX]}
-    LINK_SPEED_BYTES=$(($LINK_SPEED / 8))
-    echo "Link speed selected [${LINK_SPEED}bps] = [${LINK_SPEED_BYTES}Bps]"
-    break
-  else
-    echo "Invald Selection [$LINK_SPEED_INDEX]"
-    continue
+# Prompt the user to select the replication link speed.
+#
+# This function displays a list of predefined replication link speeds
+# (ranging from 100Mbps to 40Gbps) and asks the user to select a speed
+# by entering the corresponding number. The selected speed is stored in
+# the variable $link_speed and its byte equivalent is stored in
+# $LINK_SPEED_BYTES.
+drbd_select_link_speed() {
+  # Replication link speed options in bps
+  declare -a link_speed_list=(
+    100000000   # 100Mbps
+    1000000000  # 1Gbps
+    2000000000  # 2Gbps
+    2500000000  # 2.5Gbps
+    5000000000  # 5Gbps
+    10000000000 # 10Gbps
+    20000000000 # 20Gbps
+    40000000000 # 40Gbps
+  )
+
+  clear
+  while :; do
+    echo "Select replication link speed"
+    for i in "${!link_speed_list[@]}"; do
+      echo "[$((i + 1))]  $((link_speed_list[i] / 1000000))Mbps"
+    done
+    read -r -p "Enter choice (1-${#link_speed_list[@]}): " link_speed_index
+    if [[ "$link_speed_index" -ge 1 && "$link_speed_index" -le ${#link_speed_list[@]} ]]; then
+      link_speed=${link_speed_list[$((link_speed_index - 1))]}
+      LINK_SPEED_BYTES=$((link_speed / 8))
+      break
+    else
+      echo "Invalid selection [$link_speed_index]. Please choose between 1 and ${#link_speed_list[@]}."
+    fi
+  done
+}
+
+# Prompt the user to select the disk throughput speed.
+#
+# This function displays a list of predefined disk throughput options
+# (ranging from 100MiB/s to 1000MiB/s or greater) and asks the user to select a
+# speed by entering the corresponding number. The selected speed is stored in
+# the variable $DISK_SPEED.
+select_disk_throughput() {
+  declare -a disk_speed_list=(
+    100000000  # 100MiB/s
+    150000000  # 150MiB/s
+    200000000  # 200MiB/s
+    250000000  # 250MiB/s
+    300000000  # 300MiB/s
+    400000000  # 400MiB/s
+    500000000  # 500MiB/s
+    600000000  # 600MiB/s
+    700000000  # 700MiB/s
+    800000000  # 800MiB/s
+    900000000  # 900MiB/s
+    1000000000 # 1000MiB/s or greater
+  )
+
+  clear
+  while :; do
+    echo "Select disk throughput speed"
+    for i in "${!disk_speed_list[@]}"; do
+      echo "[$((i + 1))]  $((disk_speed_list[i] / 1000000))MiB/s"
+    done
+    read -r -p "Enter choice (1-${#disk_speed_list[@]}): " disk_speed_index
+    if [[ "$disk_speed_index" -ge 1 && "$disk_speed_index" -le ${#disk_speed_list[@]} ]]; then
+      DISK_SPEED=${disk_speed_list[$((disk_speed_index - 1))]}
+      break
+    else
+      echo "Invalid selection [$disk_speed_index]. Please choose between 1 and ${#disk_speed_list[@]}."
+    fi
+  done
+}
+
+# Calculate DRBD sync rates using user input for link speed and disk throughput.
+# The function will determine the maximum sync rate (c-max-rate) based on the
+# limiting factor and then calculate the minimum sync rate (c-min-rate) as a
+# fraction of c-max-rate, using a default or user-specified scaling factor.
+# The function will ensure that the calculated c-max-rate is reasonable and
+# that the calculated c-min-rate is not too low.
+drbd_calculate_rates() {
+  clear
+
+  # Validate inputs
+  if [[ -z $LINK_SPEED_BYTES || -z $DISK_SPEED ]]; then
+    echo "Error: Link speed and disk throughput must be selected before calculating rates."
+    exit 1
   fi
-done
 
-declare -a DISK_SPEED_LIST
-DISK_SPEED_LIST[1]=100000000
-DISK_SPEED_LIST[2]=150000000
-DISK_SPEED_LIST[3]=200000000
-DISK_SPEED_LIST[4]=250000000
-DISK_SPEED_LIST[5]=300000000
-DISK_SPEED_LIST[6]=400000000
-DISK_SPEED_LIST[7]=500000000
-DISK_SPEED_LIST[8]=600000000
-DISK_SPEED_LIST[9]=700000000
-DISK_SPEED_LIST[10]=800000000
-DISK_SPEED_LIST[11]=900000000
-DISK_SPEED_LIST[12]=1000000000
-while :; do
-  echo "Select Disk Throughput"
-  echo "[1]  100MiB/s"
-  echo "[2]  150MiB/s"
-  echo "[3]  200MiB/s"
-  echo "[4]  250MiB/s"
-  echo "[5]  300MiB/s"
-  echo "[6]  400MiB/s"
-  echo "[7]  500MiB/s"
-  echo "[8]  600MiB/s"
-  echo "[9]  700MiB/s"
-  echo "[10] 800MiB/s"
-  echo "[11] 900MiB/s"
-  echo "[12] 1000MiB/s or greater"
-  read DISK_SPEED_INDEX
-  if [ "$DISK_SPEED_INDEX" -ge 1 ] && [ "$DISK_SPEED_INDEX" -le 12 ]; then
-    DISK_SPEED=${DISK_SPEED_LIST[$DISK_SPEED_INDEX]}
-    echo "Disk throughput selected [${DISK_SPEED}MiB/s]"
-    break
+  # Determine c-max-rate based on the limiting factor
+  if [[ $DISK_SPEED -gt $LINK_SPEED_BYTES ]]; then
+    echo "Link speed [${LINK_SPEED_BYTES}Bps] is less than disk throughput [${DISK_SPEED}Bps]"
+    C_MAX_RATE=$((LINK_SPEED_BYTES / 1000000)) # Convert to MiB/s
   else
-    echo "Invald Selection [$DISK_SPEED_INDEX]"
-    continue
+    echo "Disk throughput [${DISK_SPEED}Bps] is less than link speed [${LINK_SPEED_BYTES}Bps]"
+    C_MAX_RATE=$((DISK_SPEED / 1000000)) # Convert to MiB/s
   fi
-done
 
-if [ $DISK_SPEED -gt $LINK_SPEED_BYTES ]; then
-  echo "Link speed [${LINK_SPEED_BYTES}B/s] is less than disk throughput [${DISK_SPEED}B/s]"
-  C_MAX_RATE=$(($LINK_SPEED_BYTES / 1000000))
+  # Allow user to modify c-min-rate scaling factor
+  read -r -p "Enter scaling factor for c-min-rate (default: ${C_MIN_RATE_SCALE_FACTOR}): " input_scale_factor
+  if [[ "$input_scale_factor" =~ ^[1-9][0-9]*$ ]]; then
+    C_MIN_RATE_SCALE_FACTOR=$input_scale_factor
+  fi
+
+  # Ensure c-max-rate is reasonable
+  if [[ $C_MAX_RATE -lt 1 ]]; then
+    echo "Error: Calculated c-max-rate is too low [$C_MAX_RATE MiB/s]. Check input values."
+    exit 1
+  fi
+
   echo "c-max-rate has been set to [${C_MAX_RATE}MiB/s]"
-else
-  echo "Disk throughput [${DISK_SPEED}B/s] is less than link speed [${LINK_SPEED_BYTES}B/s]"
-  C_MAX_RATE=$(($DISK_SPEED / 1000000))
-  echo "c-max-rate has been set to [${C_MAX_RATE}MiB/s]"
-fi
 
-C_MIN_RATE=$(($C_MAX_RATE / 3))
-echo "c-min-rate has been set to [${C_MIN_RATE}MiB/s]"
+  # Calculate c-min-rate dynamically based on the scaling factor
+  C_MIN_RATE=$((C_MAX_RATE / C_MIN_RATE_SCALE_FACTOR))
+  echo "c-min-rate has been set to [${C_MIN_RATE}MiB/s]"
+}
 
-DRBD_CONF="global
-{
+# Generates the DRBD configuration file
+#
+# This function creates a DRBD configuration file using predefined
+# and calculated parameters for disk and network settings. It includes
+# settings for minimum and maximum sync rates, network buffers, and
+# split-brain handlers. A random secure password is generated for use
+# as a shared secret in the configuration. The resulting configuration
+# file is saved to the path specified by $DRBD_CONF_FILE.
+#
+# Prerequisites:
+# - Variables C_MIN_RATE, C_MAX_RATE, MASTER_HOSTNAME, SLAVE_HOSTNAME,
+#   BLOCK_DEVICE, REPLICATION_MASTER_IP, REPLICATION_SLAVE_IP, and
+#   DRBD_CONF_FILE must be set prior to calling this function.
+#
+# Outputs:
+# - Writes the DRBD configuration file to $DRBD_CONF_FILE.
+drbd_generate_conf() {
+  local -r random_password=$(tr -dc 'A-Za-z0-9!?%=' </dev/urandom | head -c 24)
+
+  cat <<EOF >"$DRBD_CONF_FILE"
+global {
     usage-count no;
 }
 
-common
-{
-    disk
-    {
+common {
+    disk {
         c-min-rate ${C_MIN_RATE}M;
         c-max-rate ${C_MAX_RATE}M;
         c-fill-target 1M;
     }
 
-    net
-    {
+    net {
         max-buffers 60000;
         after-sb-0pri discard-zero-changes;
-        after-sb-1pri consensus; cram-hmac-alg sha1;
-        shared-secret PUTyourSECREThere;
+        after-sb-1pri consensus;
+        cram-hmac-alg sha1;
+        shared-secret $random_password;
     }
 
-    handlers
-    {
+    handlers {
         split-brain "/etc/iscsi-ha/scripts/drbd-split-brain-alert";
     }
 }
 
-resource iscsi1
-{
+resource iscsi1 {
     protocol C;
 
-    on ${MASTER_HOSTNAME}
-    {
+    on ${MASTER_HOSTNAME} {
         device /dev/drbd1;
         disk ${BLOCK_DEVICE};
         address ${REPLICATION_MASTER_IP}:7789;
         meta-disk internal;
     }
 
-    on ${SLAVE_HOSTNAME}
-    {
+    on ${SLAVE_HOSTNAME} {
         device /dev/drbd1;
         disk ${BLOCK_DEVICE};
         address ${REPLICATION_SLAVE_IP}:7789;
         meta-disk internal;
     }
-}"
+}
+EOF
+  echo "DRBD configuration file has been generated at $DRBD_CONF_FILE"
+}
+
+# TODO: Maybe use a function to format the speeds using thousand separators ?
+# example: echo "$speed" | sed ':a;s/\B[0-9]\{3\}\>/.&/;ta'
+drbd_select_link_speed
+select_disk_throughput
+drbd_calculate_rates
+drbd_generate_conf
 
 ######################################
 # Update ARP on the replication
@@ -898,9 +967,6 @@ function log() {
   echo "ARP: $1"
 }
 send_network_bridge_arp $REPLICATION_DEV_NAME
-
-touch $DRBD_CONF_FILE
-echo "$DRBD_CONF" >$DRBD_CONF_FILE
 
 make_box "Initializing DRBD.. This host will wait until its peer connects.
 Installation will resume after the DRBD peers connect"
