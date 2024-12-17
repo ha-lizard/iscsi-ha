@@ -963,9 +963,7 @@ drbd_generate_conf
 echo "Sending ARP update on replication interface"
 source /etc/iscsi-ha/iscsi-ha.load
 source /etc/iscsi-ha/iscsi-ha.func
-function log() {
-  echo "ARP: $1"
-}
+
 send_network_bridge_arp $REPLICATION_DEV_NAME
 
 make_box "Initializing DRBD.. This host will wait until its peer connects.
