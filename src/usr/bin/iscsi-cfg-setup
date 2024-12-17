@@ -1,0 +1,1145 @@
+#!/bin/bash
+##################################################
+# HA-Lizard noSAN Installer version 2.2.1
+##################################################
+#################################################################################################
+#
+# HA-Lizard - Open Source High Availability Framework for Xen Cloud Platform and XenServer
+#
+# Copyright 2018 Salvatore Costantino
+# ha@pulsesupply.com
+#
+# This file is part of HA-Lizard.
+#
+#    HA-Lizard is free software: you can redistribute it and/or modify
+#    it under the terms of the GNU General Public License as published by
+#    the Free Software Foundation, either version 3 of the License, or
+#    (at your option) any later version.
+#
+#    HA-Lizard is distributed in the hope that it will be useful,
+#    but WITHOUT ANY WARRANTY; without even the implied warranty of
+#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#    GNU General Public License for more details.
+#
+#    You should have received a copy of the GNU General Public License
+#    along with HA-Lizard.  If not, see <http://www.gnu.org/licenses/>.
+#
+##################################################################################################
+
+#################################
+# function validate_ip for
+# passed in arg1. Returns 0
+# on valid IP and 1 on invalid
+################################
+function validate_ip () {
+	RESTORE_IFS=$IFS
+	IFS="."
+	IP=$1
+	IP_ARRAY=()
+
+	for i in ${IP[@]}
+	do
+        	IP_ARRAY+=($i)
+	done
+	IFS=$RESTORE_IFS
+
+	# Make sure we have 4 array elements
+	if [ ${#IP_ARRAY[*]} -ne 4 ]
+	then
+        	return 1
+	else
+        	# Check that each octet is between 0-255
+	        for i in ${IP_ARRAY[@]}
+        	do
+                	if [ $i -ge 0 ] && [ $i -le 255 ]
+	                then
+        	                continue
+                	else
+                        	return 1
+	                fi
+        	done
+	fi
+} #End function validate_ip
+
+
+#######################################
+# function remove_local_storage
+# removes the default local SR created
+# on a new XenServer installation
+#
+# Args passed in:
+# None
+#
+# Returns:
+# 0 on success
+# 1 on general error
+#
+# Global variable set in case a
+# rollback is required:
+# THIS_HOST_LOCAL_STORAGE_PBD_DEVICE
+########################################
+function remove_local_storage () {
+        THIS_HOST_LOCAL_STORAGE=`xe sr-list type=lvm host=$THIS_HOST --minimal`
+        if [ $? -ne 0 -o -z "$THIS_HOST_LOCAL_STORAGE" ]
+        then
+                echo "Failed to locate SR for local storage"
+                return 1
+        fi
+
+        THIS_HOST_LOCAL_STORAGE_PBD=`xe pbd-list sr-uuid=$THIS_HOST_LOCAL_STORAGE --minimal`
+        if [ $? -ne 0 -o -z "$THIS_HOST_LOCAL_STORAGE_PBD" ]
+        then
+                echo "Failed to locate PBD for local storage"
+                return 1
+        fi
+
+        THIS_HOST_LOCAL_STORAGE_PBD_DEVICE=`xe pbd-param-get uuid=$THIS_HOST_LOCAL_STORAGE_PBD param-name=device-config param-key=device`
+	##########################
+	#canonicalize the path
+	##########################
+	THIS_HOST_LOCAL_STORAGE_PBD_DEVICE=`readlink -e $THIS_HOST_LOCAL_STORAGE_PBD_DEVICE`
+        ############################
+        # write device path to disk
+        ############################
+        if [ $? -eq 0 ]
+        then
+                if [ -d /etc/iscsi-ha/state ]
+                then
+                        touch /etc/iscsi-ha/state/local_storage_device
+                        echo $THIS_HOST_LOCAL_STORAGE_PBD_DEVICE > /etc/iscsi-ha/state/local_storage_device
+                else
+                        touch /tmp/local_storage_device
+                        echo $THIS_HOST_LOCAL_STORAGE_PBD_DEVICE > /tmp/local_storage_device
+                fi
+        fi
+
+        echo "Hostname detected = $THIS_HOST"
+        echo "Local Storage SR UUID discovered = $THIS_HOST_LOCAL_STORAGE"
+        echo "Local Storage PBD UUID discovered = $THIS_HOST_LOCAL_STORAGE_PBD"
+        echo
+        echo "Press Enter to Continue"
+
+        read enter
+        echo
+
+        echo "Unplugging PBD $THIS_HOST_LOCAL_STORAGE_PBD"
+        xe pbd-unplug uuid=$THIS_HOST_LOCAL_STORAGE_PBD
+        if [ $? -ne 0 ]
+        then
+                echo "error detected while unplugging PBD $THIS_HOST_LOCAL_STORAGE_PBD. Exiting"
+                return 1
+        fi
+        sleep 1
+        echo
+
+        echo "Destroying PBD $THIS_HOST_LOCAL_STORAGE_PBD"
+        xe pbd-destroy uuid=$THIS_HOST_LOCAL_STORAGE_PBD
+        if [ $? -ne 0 ]
+        then
+                echo "error detected while destroying PBD $THIS_HOST_LOCAL_STORAGE_PBD. Exiting"
+                return 1
+        fi
+        sleep 1
+        echo
+        echo "Removing Storage $THIS_HOST_LOCAL_STORAGE"
+        xe sr-forget uuid=$THIS_HOST_LOCAL_STORAGE
+        if [ $? -ne 0 ]
+        then
+                echo "error detected while removing storage $THIS_HOST_LOCAL_STORAGE. Exiting"
+                exit 1
+        fi
+
+        echo "Local storage repository has been successfully removed"
+        return 0
+} # end function remove_local_storage
+
+################################################
+# Function restore_local_storage
+# Reinitializes the default XenServer local SR
+# in case a rollback is required to bring the 
+# host's storage back to the default setting
+#
+# Args passed in:
+# None - but function expects to find the
+# path to the storage device in 
+# /tmp/local_storage_device        OR
+# /etc/iscsi-ha/state/local_storage_device 
+#
+# Returns:
+# 0 on success
+# 1 on general error
+#
+################################################
+function restore_local_storage () {
+
+        if [ -e /etc/iscsi-ha/state/local_storage_device ]
+        then
+                DEVICE=`cat /etc/iscsi-ha/state/local_storage_device`
+        else
+                DEVICE=`cat /tmp/local_storage_device`
+                if [ $? -ne 0 ]
+                then
+                        echo "Missing device configuration /tmp/local_storage_device"
+                        return 1
+                fi
+        fi
+
+        if [ $? -eq 0 ]
+        then
+                xe sr-create\
+                 content-type=user\
+                 device-config:device=$DEVICE\
+                 host-uuid=$THIS_HOST_UUID\
+                 name-label='Local storage'\
+                 shared=false\
+                 type=lvm
+
+                if [ $? -eq 0 ]
+                then
+                        return 0
+                else
+                        return 1
+                fi
+
+        else
+                return 1
+        fi
+} # end function restore_local_storage
+
+###########################################
+# Function rollback_install
+# restores any modified default config
+# files and storage repositiries back
+# to the state prior to running installer
+# Also removes any packages installed
+# 
+# Args passed in:
+# Arg1 = installation UUID
+#
+# Returns:
+# 0 on success
+# 1 on general error
+###########################################
+function rollback_install () {
+
+	if [ $1 ]
+	then
+		INSTALL_UID=$1
+	else
+		echo "Missing required installation UID. Some settings may not be restored"
+	fi
+
+	echo "Rolling back installation..."
+
+	rm -f /etc/yum.repos.d/ha-lizard.repo
+	service iscsi-ha-watchdog stop
+	service iscsi-ha stop
+	service ha-lizard stop
+	service ha-lizard-watchdog stop
+	systemctl stop tgtd
+	service drbd stop
+
+	yum --enablerepo=ha-lizard-base,ha-lizard-epel -y remove scsi-target-utils
+	rm -rf /etc/tgt
+	#yum -y remove sendmail
+
+	yum remove drbd84-utils --enablerepo=ha-lizard-elrepo -y 
+	yum remove drbd84-utils-sysvinit --enablerepo=ha-lizard-elrepo -y 
+
+	rm -f /etc/drdb.conf*
+
+	if [ -d $TMP_LOCATION/$1 ]
+	then
+		FILE_LIST=`ls $TMP_LOCATION/$INSTALL_UID`
+		for file in ${FILE_LIST[@]}
+		do
+			case $file in
+				#`basename $LVM_CONF`)
+				*lvm*)
+					echo "Restoring LVM configuration"
+					###############################
+					## replace dashes with slashes
+					###############################
+					REAL_FILE=${file//_/\/}
+					mv -f $TMP_LOCATION/$INSTALL_UID/$file $REAL_FILE
+				;;
+
+				`basename $IPTABLES_CONF`)
+					echo "Restoring iptables configuration"
+					mv -f $TMP_LOCATION/$INSTALL_UID/`basename $IPTABLES_CONF` $IPTABLES_CONF
+					service iptables restart
+				;;
+			esac
+
+		done
+		restore_local_storage
+		rpm -q ha-lizard --quiet
+		RETVAL=$?
+		if [ $RETVAL -eq 0 ]
+		then
+			rpm -e ha-lizard
+			rm -rf /etc/ha-lizard &>/dev/null
+		else
+			/etc/ha-lizard/scripts/uninstall --auto
+		fi
+
+		rpm -q iscsi-ha --quiet
+		RETVAL=$?
+		if [ $RETVAL -eq 0 ]
+		then
+			rpm -e iscsi-ha
+			rm -rf /etc/iscsi-ha &>/dev/null
+		else
+			/etc/iscsi-ha/scripts/uninstall --auto
+		fi
+		echo "!!!!! Remember to delete the iSCSI SR from the pool before installing again !!!!!"
+		exit $?
+	else
+		echo "No rollback data found. Some settings may not be restored"
+		exit 1
+	fi
+
+} # End function rollback_install
+
+function make_box ()
+{
+        local STRING="$*"
+        local CHAR_HORIZONTAL="-"
+        local CHAR_VERTICAL="|"
+        local NUM_ROWS=`echo "$*" | wc -l`
+
+        if [ $NUM_ROWS -eq 1 ]
+        then
+                local STRING_LEN=${#STRING}
+        else
+                #Find the length of the longest line
+                local LENGTH=0
+                RESTORE_IFS=$IFS
+                IFS=$'\n'
+                for line in ${STRING[@]}
+                do
+                        local NEW_LENGTH=${#line}
+                        if [ $NEW_LENGTH -gt $LENGTH ]
+                        then
+                                LENGTH=$NEW_LENGTH
+                        fi
+                done
+                IFS=$RESTORE_IFS
+                local STRING_LEN=$LENGTH
+        fi
+
+        local HORIZ_LEN=$(($STRING_LEN + 4))
+
+        #create the top border
+        local COUNT=0
+        while [ $COUNT -lt $HORIZ_LEN ]
+        do
+                echo -n "$CHAR_HORIZONTAL"
+                COUNT=$(($COUNT + 1))
+        done
+        echo
+
+        #create the rows
+        if [ $NUM_ROWS -eq 1 ]
+        then
+                echo "$CHAR_VERTICAL $* $CHAR_VERTICAL"
+
+        elif [ $NUM_ROWS -gt 1 ]
+        then
+                RESTORE_IFS=$IFS
+                IFS=$'\n'
+                for line in ${STRING[@]}
+                do
+                        NUM_SPACES=$(($HORIZ_LEN - ${#line} - 4))
+                        COUNT=0
+                        SPACE=" "
+                        while [ $NUM_SPACES -gt $COUNT ]
+                        do
+                                SPACE="$SPACE "
+                                COUNT=$(($COUNT + 1))
+                        done
+                        printf "$CHAR_VERTICAL $line$SPACE$CHAR_VERTICAL\n"
+                done
+                IFS=$RESTORE_IFS
+        fi
+
+        #create the bottom border
+        COUNT=0
+        while [ $COUNT -lt $HORIZ_LEN ]
+        do
+                echo  -n "$CHAR_HORIZONTAL"
+                COUNT=$(($COUNT + 1))
+        done
+        echo
+} #End function make_box
+
+
+clear
+make_box "
+ ha-lizard noSAN Automated Installer for XenServer 7                           
+ Copyright 2021 Salvatore Costantino                                           
+ ha@pulsesupply.com                                                            
+                                                                               
+                                                                               
+    ha-lizard is free software: you can redistribute it and/or modify          
+    it under the terms of the GNU General Public License as published by       
+    the Free Software Foundation, either version 3 of the License, or          
+    (at your option) any later version.                                        
+                                                                               
+    ha-lizard is distributed in the hope that it will be useful,               
+    but WITHOUT ANY WARRANTY; without even the implied warranty of             
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the              
+    GNU General Public License for more details.                               
+                                                                               
+    You should have received a copy of the GNU General Public License          
+    along with ha-lizard.  If not, see <http://www.gnu.org/licenses/>."
+
+echo -e "\r\n\r\n\r\n" 
+echo "###############################################################################"
+echo "################## IMPORTANT - READ BELOW BEFORE PROCEEDING ###################"
+echo "###############################################################################"
+echo
+
+make_box "Before proceeding, check that the following requirements have been satisfied"
+make_box "- This installer requires a 2-node XenServer pool. A master and a slave.
+- Each host shall have a unique hostname set (localhost is not valid)
+- A replication interface and associated IP address should be configured for each host before proceeding
+- If you are not converting the default local storage into iSCSI-HA stotage, then
+  you should know the block device name to be used for storage before proceeding (ie. /dev/sdb)
+- If you are converting the default local storage to iSCSI-HA storage ALL data will be lost."
+
+
+echo "Press <enter> to continue or control+c to exit now"
+read NEXT
+
+REQUIRED=(awk grep ip uuidgen basename wget readlink xe tar iptables yum dd echo cat service systemctl hostname curl rpm)
+for i in ${REQUIRED[@]}
+do
+	which $i > /dev/null
+	if [ $? -eq 0 ]
+	then
+		echo "$i found OK.."
+	else
+		echo "!! Missing Dependancy $i"
+		exit 1
+	fi
+done
+
+###################################
+# Environment and default values
+###################################
+FW_CHAIN_NAME='RH-Firewall-1-INPUT'
+FW_RULE_POSITION=`iptables -L ${FW_CHAIN_NAME} --line-numbers | grep 'reject-with' | awk '{print $1}'`
+REPLICATION_LOCAL_IP_MASTER='10.10.10.1'
+REPLICATION_LOCAL_IP_SLAVE='10.10.10.2'
+REPLICATION_REMOTE_IP_MASTER='10.10.10.2'
+REPLICATION_REMOTE_IP_SLAVE='10.10.10.1'
+REPLICATION_ISCSI_IP='10.10.10.3'
+HALIZARD_MIRROR_URL='http://halizard.org/release'
+TMP_LOCATION='/tmp/halizard_tmp_'
+KERNEL_RELEASE=`uname -r`
+ISCSI_CONFIG_FILE='/etc/tgt/targets.conf'
+ISCSI_LUN='10'
+LVM_CONF='/etc/lvm/lvm.conf /etc/lvm/master/lvm.conf'
+DRBD_CONF_FILE='/etc/drbd.conf'
+IPTABLES_CONF='/etc/sysconfig/iptables'
+INSTALL_UID=`uuidgen`
+INSTALL_LOG=$TMP_LOCATION/$INSTALL_UID/install.log
+THIS_HOST=`hostname`
+THIS_HOST_UUID=`xe host-list name-label=$THIS_HOST --minimal`
+
+if [ ! -d $TMP_LOCATION ]
+then
+	mkdir $TMP_LOCATION
+fi
+mkdir $TMP_LOCATION/$INSTALL_UID
+> $INSTALL_LOG
+
+#####################################
+# Is this a rollback?
+#####################################
+if [ "$1" -a -d $TMP_LOCATION/$1 ]
+then
+	echo "Rolling back configuration"
+	rollback_install $1
+fi
+
+######################################
+# Check required hosts in pool
+######################################
+POOL_HOSTS=`xe host-list --minimal`
+if [ "$1" -a "$1" = "--force" ]
+then
+	echo "Continuing with forced installation"
+elif [ ${#POOL_HOSTS} -ne 73 ]
+then
+	echo "Installer requires a pool with 2 hosts. Exiting.."
+	exit 1
+else
+	echo "Pool number of host validated"
+fi
+
+
+#####################################
+# Check for connection to internet
+#####################################
+wget -q --tries=10 --timeout=20 --spider $HALIZARD_MIRROR_URL
+if [ $? -ne 0 ]
+then
+	echo "No internet access detected. An internet connection"
+	echo "is required to download the required components"
+	exit 1
+fi
+
+#######################################
+# Is this host Master or Slave
+#######################################
+if [ -e /etc/xensource/pool.conf ]
+then
+        echo "Checking if this host is a Pool Master or Slave"
+        STATE=`/bin/cat /etc/xensource/pool.conf`
+        echo "This host's pool status = $STATE"
+else
+        echo "/etc/xensource/pool.conf missing. Cannot determine master/slave status."
+	echo "Check that you have a properly configured pool before continuing. Exiting.."
+        exit 1
+fi
+
+#######################################
+# Create repos required for installing
+# DRBD init, DRBD userland tools, tgt
+#######################################
+echo '#######################
+## Base CentOS7 Repo ##
+#######################
+[ha-lizard-base]
+name=CentOS-$releasever - ha-lizard
+mirrorlist=http://mirrorlist.centos.org/?release=7&arch=$basearch&repo=os&infra=$infra
+baseurl=http://linuxsoft.cern.ch/centos-vault/centos/7/os/$basearch/
+enabled=0
+gpgcheck=0
+
+#######################
+## epel CentOS7 Repo ##
+#######################
+[ha-lizard-epel]
+name=Extra Packages for Enterprise Linux 7 - $basearch
+baseurl=https://fedora-archive.ip-connect.info/epel/7/$basearch
+mirrorlist=https://mirrors.fedoraproject.org/metalink?repo=epel-7&arch=$basearch
+failovermethod=priority
+enabled=0
+gpgcheck=0
+
+#########################
+## elrepo CentOS7 Repo ##
+#########################
+### Name: ELRepo.org Community Enterprise Linux Repository for el7
+### URL: http://elrepo.org/
+
+[ha-lizard-elrepo]
+name=ELRepo.org Community Enterprise Linux Repository - el7
+baseurl=http://ftp.scientificlinux.org/linux/elrepo/archive/elrepo/el7/$basearch/
+mirrorlist=http://mirrors.elrepo.org/mirrors-elrepo.el7
+enabled=0
+gpgcheck=0
+protect=0' > /etc/yum.repos.d/ha-lizard.repo
+
+#######################################
+# Declare default values for master
+# and slave replication interfaces 
+#######################################
+if [ $STATE = "master" ]
+then
+	REPLICATION_LOCAL_IP=$REPLICATION_LOCAL_IP_MASTER
+	REPLICATION_REMOTE_IP=$REPLICATION_REMOTE_IP_MASTER
+else
+	REPLICATION_LOCAL_IP=$REPLICATION_LOCAL_IP_SLAVE
+	REPLICATION_REMOTE_IP=$REPLICATION_REMOTE_IP_SLAVE
+fi
+
+
+echo "Checking for latest releases of HA-Lizard components"
+ISCSIHA_RELEASE=`curl -4s $HALIZARD_MIRROR_URL/iscsi-ha/current_release`
+HALIZARD_RELEASE=`curl -4s $HALIZARD_MIRROR_URL/ha-lizard/current_release`
+ISCSIHA_RPM_RELEASE=`curl -4s $HALIZARD_MIRROR_URL/iscsi-ha/current_rpm_release`
+HALIZARD_RPM_RELEASE=`curl -4s $HALIZARD_MIRROR_URL/ha-lizard/current_rpm_release`
+
+echo -e "Found: $ISCSIHA_RELEASE $HALIZARD_RELEASE"
+echo -e "Found: $ISCSIHA_RPM_RELEASE $HALIZARD_RPM_RELEASE\r\n\r\n"
+
+
+####################################
+# Read local replication IP
+####################################
+SUCCESS=false
+while [ $SUCCESS = false ]
+do
+
+	make_box "Enter Replication IP for this host and press <Enter> 
+(leave blank to select default value of $REPLICATION_LOCAL_IP)"
+	read REPLICATION_LOCAL_IP_OVERRIDE
+	if [ $REPLICATION_LOCAL_IP_OVERRIDE ]
+	then
+		validate_ip $REPLICATION_LOCAL_IP_OVERRIDE > /dev/null
+		if [ $? -ne 0 ]
+		then
+        		echo "Invalid IP Address Specified !"
+		else
+			SUCCESS=true
+			REPLICATION_LOCAL_IP=$REPLICATION_LOCAL_IP_OVERRIDE
+			echo -e "Local replication interface address set to $REPLICATION_LOCAL_IP\r\n"
+		fi
+	else
+		SUCCESS=true
+		echo -e "Local replication interface address set to $REPLICATION_LOCAL_IP\r\n"
+	fi
+done
+
+IP_IS_CONFIGURED=`ip -f inet addr show | grep -c $REPLICATION_LOCAL_IP`
+if [ $IP_IS_CONFIGURED -lt 1 ]
+then
+	echo "IP Address $REPLICATION_LOCAL_IP is not configured on this host."
+	echo "Configure your replication IP and interface before running installer"
+	exit 1
+fi
+
+####################################
+# Read remote replication IP
+####################################
+SUCCESS=false
+while [ $SUCCESS = false ]
+do
+	make_box "Enter Replication IP for remote host and press <Enter>
+(leave blank to select default value of $REPLICATION_REMOTE_IP)"
+	read REPLICATION_REMOTE_IP_OVERRIDE
+	if [ $REPLICATION_REMOTE_IP_OVERRIDE ]
+	then
+		validate_ip $REPLICATION_REMOTE_IP_OVERRIDE > /dev/null
+		if [ $? -ne 0 ]
+		then
+        		echo "Invalid IP Address Specified !"
+		else
+			SUCCESS=true
+			REPLICATION_REMOTE_IP=$REPLICATION_REMOTE_IP_OVERRIDE
+			echo -e "Remote replication interface address set to $REPLICATION_REMOTE_IP\r\n"
+		fi
+	else
+		SUCCESS=true
+		echo -e "Remote replication interface address set to $REPLICATION_REMOTE_IP\r\n"
+	fi
+done
+
+if [ $STATE = "master" ]
+then
+	REPLICATION_MASTER_IP=$REPLICATION_LOCAL_IP
+	REPLICATION_SLAVE_IP=$REPLICATION_REMOTE_IP
+else
+        REPLICATION_MASTER_IP=$REPLICATION_REMOTE_IP
+        REPLICATION_SLAVE_IP=$REPLICATION_LOCAL_IP
+fi
+
+####################################
+# Read value for floating IP address
+####################################
+SUCCESS=false
+while [ $SUCCESS = false ]
+do
+	make_box "Enter Shared/Floating IP for pool storage and press <Enter>
+(leave blank to select default value of $REPLICATION_ISCSI_IP)"
+	read REPLICATION_ISCSI_IP_OVERRIDE
+	if [ $REPLICATION_ISCSI_IP_OVERRIDE ]
+	then
+		validate_ip $REPLICATION_ISCSI_IP_OVERRIDE > /dev/null
+		if [ $? -ne 0 ]
+		then
+        		echo "Invalid IP Address Specified !"
+		else
+			SUCCESS=true
+			REPLICATION_ISCSI_IP=$REPLICATION_ISCSI_IP_OVERRIDE
+			echo -e "Shared replication interface address set to $REPLICATION_ISCSI_IP\r\n"
+		fi
+	else
+		SUCCESS=true
+		echo -e "Shared replication interface address set to $REPLICATION_ISCSI_IP\r\n"
+	fi
+done
+
+###################################
+# Get hostnames
+###################################
+make_box "Enter the hostname for the Master and press <Enter>
+(!! Must be the configured hostname !!)"
+read MASTER_HOSTNAME
+if [ -z $MASTER_HOSTNAME ]
+then
+	echo "Hostname cannot be empty. exiting"
+	exit 1
+fi
+
+make_box "Enter the hostname for the Slave and press <Enter>
+(!! Must be the configured hostname !!)"
+read SLAVE_HOSTNAME
+if [ -z $SLAVE_HOSTNAME ]
+then
+        echo "Hostname cannot be empty. exiting"
+        exit 1
+fi
+
+#####################################
+# Determine subnet for firewall rule
+# Currently assumes a 24bit mask
+#####################################
+BASE_SUBNET=`echo $REPLICATION_ISCSI_IP | cut -d"." -f1-3`
+REPLICATION_SUBNET="$BASE_SUBNET.0/24"
+
+#####################################
+# Determine the interface name to
+# bind the floating IP to
+#####################################
+echo "The following interfaces were found on this host"
+ip addr show | grep inet | grep 'xapi\|xenbr'
+echo
+echo "Select replication inerface"
+IF_LIST=(`ip addr show | grep 'xenbr\|xapi' | grep : | awk -F ": " {'print $2'}`)
+IF_COUNT=0
+for i in ${IF_LIST[@]}
+do
+	echo "Enter $IF_COUNT for interface ${IF_LIST[$IF_COUNT]}"
+	IF_COUNT=$(($IF_COUNT + 1))
+done
+IF_COUNT=$(($IF_COUNT - 1)) #decrement counter to reflect accurately array positions
+
+echo "Enter 0 - $IF_COUNT for the desired Replication Interface"
+read SELECT_REPLICATION_DEV_NAME
+
+REPLICATION_DEV_NAME=${IF_LIST[$SELECT_REPLICATION_DEV_NAME]}
+if [ $REPLICATION_DEV_NAME ]
+then
+	echo "Interface $REPLICATION_DEV_NAME selected"
+else
+	echo "Error reading selected interface. Exiting..."
+	exit 1
+fi
+
+
+######################################
+# Get Packages using the latest
+# version available on mirror
+######################################
+if [ -d $TMP_LOCATION ]
+then
+	echo "Local temp folder $TMP_LOCATION found"
+else
+	echo "Creating temp folder $TMP_LOCATION"
+	mkdir $TMP_LOCATION
+fi
+
+cd $TMP_LOCATION
+echo "Downloading the latest stable version of HA-Lizard to $TMP_LOCATION"
+wget -q $HALIZARD_MIRROR_URL/ha-lizard/$HALIZARD_RPM_RELEASE
+
+echo "Downloading the latest stable version of iSCSI-HA to $TMP_LOCATION"
+wget -q $HALIZARD_MIRROR_URL/iscsi-ha/$ISCSIHA_RPM_RELEASE
+
+######################################
+# Unpack packages
+# DEPRECATED
+######################################
+#echo "Unpacking iSCSI-HA"
+#tar -zxvf $ISCSIHA_RELEASE >> $INSTALL_LOG
+#echo "Unpacking HA-Lizard"
+#tar -zxvf $HALIZARD_RELEASE >> $INSTALL_LOG
+
+######################################
+# Update firewall - allow hosts 
+# on replication subnet
+######################################
+echo "Updating Firewall Rules"
+cp $IPTABLES_CONF $TMP_LOCATION/$INSTALL_UID/
+iptables -I RH-Firewall-1-INPUT $FW_RULE_POSITION -s $REPLICATION_SUBNET -j ACCEPT
+service iptables save
+service iptables restart
+
+######################################
+# Install DRBD using RPMs in iSCSI-HA
+# release. Set chkconfig to off
+######################################
+echo "Installing DRBD packages"
+yum install drbd84-utils --enablerepo=ha-lizard-elrepo -y >> $INSTALL_LOG
+yum install drbd84-utils-sysvinit --enablerepo=ha-lizard-elrepo -y >> $INSTALL_LOG
+
+chkconfig drbd off
+
+####################################
+# Install iSCSI Target Framework
+# and make sure it does not start
+# automatically
+####################################
+echo "Installing iSCSI Target Framework"
+yum install scsi-target-utils --enablerepo=ha-lizard-epel,ha-lizard-base -y >> $INSTALL_LOG
+systemctl disable tgtd
+
+#####################################
+# Install HA-Lizard
+#####################################
+echo "Installing HA-Lizard High Availability Component"
+sleep 2
+#$TMP_LOCATION/`basename $HALIZARD_RELEASE .tgz`/scripts/install --nostart >> $INSTALL_LOG
+rpm -Uvh $TMP_LOCATION/$HALIZARD_RPM_RELEASE
+
+#####################################
+# Install iSCSI-HA
+#####################################
+echo "Installing iSCSI-HA Storage High Availability Component"
+sleep 2
+#$TMP_LOCATION/`basename $ISCSIHA_RELEASE .tgz`/scripts/install --nostart >> $INSTALL_LOG
+rpm -Uvh  $TMP_LOCATION/$ISCSIHA_RPM_RELEASE
+
+####################################
+# Identify the local block device
+# to be used for HA-Lizard HA storage
+####################################
+make_box "Convert local storage to iSCSI-HA storage? <yes or no>"
+read USE_LOCAL
+
+if [ "$USE_LOCAL" = "yes" ]
+then
+	remove_local_storage
+	if [ $? -eq 0 ]
+	then
+		BLOCK_DEVICE=`readlink -f $THIS_HOST_LOCAL_STORAGE_PBD_DEVICE`
+	else
+		make_box "Error converting local SR to usable block device
+Enter full path to backing block device to be
+used for HA storage and press <Enter> (ex. /dev/sdb)"
+        	read BLOCK_DEVICE
+	fi
+
+elif  [ "$USE_LOCAL" = "no" ]
+then
+	make_box "Enter full path to backing block device to be
+	used for HA storage and press <Enter> (ex. /dev/sdb)"
+	read BLOCK_DEVICE
+else
+	echo "Invalid entry - exiting"
+	exit 1
+fi
+if [ $BLOCK_DEVICE ]
+then
+	if [ ! -e $BLOCK_DEVICE ]
+	then
+		echo "Block device - invalid path! Exiting.."
+		exit 1
+	fi
+else
+	echo "Block device not specified! Exiting.."
+	exit 1
+fi        
+echo -e "Backing block device set to $BLOCK_DEVICE\r\n"
+
+#####################################
+# Identify LUN to be set in TGT
+#####################################
+make_box "Enter LUN to be used for exposing iSCSI storage and press <Enter>
+(Leave blank to accept default value of $ISCSI_LUN)"
+read ISCSI_LUN_OVERRIDE
+if [ $ISCSI_LUN_OVERRIDE ]
+then
+	ISCSI_LUN=$ISCSI_LUN_OVERRIDE
+fi
+echo -e "LUN set to $ISCSI_LUN\r\n"
+
+#####################################
+# Insert iSCSI device config
+#####################################
+echo "############### BEGIN HALIZARD INSERTION ###############
+<target iqn.2015.com.halizard:noSAN>
+	backing-store /dev/drbd1
+	lun $ISCSI_LUN
+</target>
+############### END HALIZARD INSERTION ###############" >> $ISCSI_CONFIG_FILE
+
+###################################
+# Update LVM Filters - block LVM
+# signatures from being read from
+# /dev/drbd1 and $BLOCK_DEVICE
+# LVM should see LVs via iSCSI only
+###################################
+for lvm_conf in ${LVM_CONF[@]}
+do
+	LVM_CONF_BU_NAME=${lvm_conf//\//_}
+	
+
+	cp $lvm_conf $TMP_LOCATION/$INSTALL_UID/$LVM_CONF_BU_NAME
+	
+	TIME_STAMP=`date +%s`
+	if [ -e ${lvm_conf}.halizard_restore ]
+	then
+		mv -f ${lvm_conf}.halizard_restore ${lvm_conf}.halizard_restore.$TIME_STAMP
+	fi
+	
+	echo "Backing up LVM configuration file $lvm_conf to $lvm_conf.halizard_restore"
+	cp  $lvm_conf $lvm_conf.halizard_restore
+	
+	LV_FILTER="    filter = [ \"r|$BLOCK_DEVICE|\", \"r|/dev/drbd1|\" ]"
+	LVM_DEVICES_LINE_BEGIN=$(cat -n $lvm_conf | grep 'devices {' | awk {'print $1'})
+	LVM_INSERT_ROW_NUMBER=$(( $LVM_DEVICES_LINE_BEGIN + 1 ))
+
+	sed -i "${LVM_INSERT_ROW_NUMBER}i $LV_FILTER" $lvm_conf
+done
+
+###################################
+# Configure iSCSI-HA module
+################################### 
+ISCSI_HA_CONF="DRBD_RESOURCES=iscsi1
+ISCSI_TARGET_SERVICE=tgtd
+DRBD_VIRTUAL_IP=$REPLICATION_ISCSI_IP
+DRBD_VIRTUAL_MASK=255.255.255.0
+DRBD_INTERFACE=$REPLICATION_DEV_NAME
+MONITOR_MAX_STARTS=5
+MONITOR_DELAY=10
+MONITOR_KILLALL=1
+MONITOR_SCANRATE=5
+ENABLE_LOGGING=1
+MAIL_USE_SHARED_PARAMS=0
+MAIL_ON=1
+MAIL_SUBJECT='HA-Lizard noSAN SYSTEM ALERT - FROM HOST: $HOSTNAME'
+MAIL_FROM=root@localhost
+MAIL_TO=root@localhost
+MAIL_SCREEN_TIME=30
+SMTP_SERVER=127.0.0.1
+SMTP_PORT=25
+SMTP_USER=""
+SMTP_PASS=""
+#END CONFIG FILE"
+
+echo "$ISCSI_HA_CONF" > /etc/iscsi-ha/iscsi-ha.conf
+
+##################################
+# Configure HA-Lizard module
+##################################
+SUCCESS=false
+while [ $SUCCESS = false ]
+do
+	make_box "Enter heuristic IP address used by HA-Lizard.
+This can be any IP address reachable by this host
+by traversing the XenServer management network and press <Enter>"
+	read HEURISTIC_IP
+	validate_ip $HEURISTIC_IP > /dev/null
+	if [ $? -ne 0 ]
+	then
+		echo "Invalid IP Address Specified !"
+	else
+		SUCCESS=true
+		echo -e "Heuristic IP set to $HEURISTIC_IP\r\n"
+	fi
+done
+
+echo "Press <enter> to continue installation"
+read CONTINUE
+
+
+ha-cfg set-quiet FENCE_ENABLED 1
+ha-cfg set-quiet FENCE_HEURISTICS_IPS $HEURISTIC_IP
+ha-cfg set-quiet FENCE_MIN_HOSTS 2
+ha-cfg set-quiet FENCE_QUORUM_REQUIRED 1
+ha-cfg set-quiet FENCE_USE_IP_HEURISTICS 1
+ha-cfg set-quiet MONITOR_DELAY 15
+ha-cfg set-quiet MONITOR_MAX_STARTS 20
+ha-cfg set-quiet XAPI_COUNT 2
+ha-cfg set-quiet XAPI_DELAY 10
+
+###################################
+# Setup/Copy DRBD configuration
+# Initialize DRBD
+###################################
+mv $DRBD_CONF_FILE ${DRBD_CONF_FILE}.backup # Backup any existing DRBD conf
+
+#####################################
+# Gather disk and replication link
+# performance metrics - used to
+# set DRBD sync speed
+# this is for initial sync and
+# resync speed only. DRBD replication
+# will always operate as fast as
+# the HW will support
+#####################################
+declare -a LINK_SPEED_LIST
+LINK_SPEED_LIST[1]=100000000
+LINK_SPEED_LIST[2]=1000000000
+LINK_SPEED_LIST[3]=2000000000
+LINK_SPEED_LIST[4]=2500000000
+LINK_SPEED_LIST[5]=5000000000
+LINK_SPEED_LIST[6]=10000000000
+LINK_SPEED_LIST[7]=20000000000
+LINK_SPEED_LIST[8]=40000000000
+
+while :
+do
+	echo "Select replication link speed"
+	echo "[1] 100Mbps"
+	echo "[2] 1Gbps"
+	echo "[3] 2Gbps"
+	echo "[4] 2.5Gbps"
+	echo "[5] 5Gbps"
+	echo "[6] 10Gbps"
+	echo "[7] 20Gbps"
+	echo "[8] 40Gbps"
+
+	read LINK_SPEED_INDEX
+	if [ "$LINK_SPEED_INDEX" -ge 1 ] && [ "$LINK_SPEED_INDEX" -le 8 ]
+	then
+		LINK_SPEED=${LINK_SPEED_LIST[$LINK_SPEED_INDEX]}
+		LINK_SPEED_BYTES=$(( $LINK_SPEED / 8 ))
+		echo "Link speed selected [${LINK_SPEED}bps] = [${LINK_SPEED_BYTES}Bps]"
+		break
+	else
+		echo "Invald Selection [$LINK_SPEED_INDEX]"
+		continue
+	fi
+done
+	
+declare -a DISK_SPEED_LIST
+DISK_SPEED_LIST[1]=100000000
+DISK_SPEED_LIST[2]=150000000
+DISK_SPEED_LIST[3]=200000000
+DISK_SPEED_LIST[4]=250000000
+DISK_SPEED_LIST[5]=300000000
+DISK_SPEED_LIST[6]=400000000
+DISK_SPEED_LIST[7]=500000000
+DISK_SPEED_LIST[8]=600000000
+DISK_SPEED_LIST[9]=700000000
+DISK_SPEED_LIST[10]=800000000
+DISK_SPEED_LIST[11]=900000000
+DISK_SPEED_LIST[12]=1000000000
+while :
+do
+	echo "Select Disk Throughput"
+	echo "[1]  100MiB/s"
+	echo "[2]  150MiB/s"
+	echo "[3]  200MiB/s"
+	echo "[4]  250MiB/s"
+	echo "[5]  300MiB/s"
+	echo "[6]  400MiB/s"
+	echo "[7]  500MiB/s"
+	echo "[8]  600MiB/s"
+	echo "[9]  700MiB/s"
+	echo "[10] 800MiB/s"
+	echo "[11] 900MiB/s"
+	echo "[12] 1000MiB/s or greater"
+	read DISK_SPEED_INDEX
+	if [ "$DISK_SPEED_INDEX" -ge 1 ] && [ "$DISK_SPEED_INDEX" -le 12 ]
+	then
+		DISK_SPEED=${DISK_SPEED_LIST[$DISK_SPEED_INDEX]}
+		echo "Disk throughput selected [${DISK_SPEED}MiB/s]"
+		break
+	else
+		echo "Invald Selection [$DISK_SPEED_INDEX]"
+		continue
+	fi
+done
+
+if [ $DISK_SPEED -gt $LINK_SPEED_BYTES ]
+then
+	echo "Link speed [${LINK_SPEED_BYTES}B/s] is less than disk throughput [${DISK_SPEED}B/s]"
+	C_MAX_RATE=$(( $LINK_SPEED_BYTES / 1000000 ))
+	echo "c-max-rate has been set to [${C_MAX_RATE}MiB/s]"
+else
+	echo "Disk throughput [${DISK_SPEED}B/s] is less than link speed [${LINK_SPEED_BYTES}B/s]"
+	C_MAX_RATE=$(( $DISK_SPEED / 1000000 ))
+	echo "c-max-rate has been set to [${C_MAX_RATE}MiB/s]"
+fi
+
+C_MIN_RATE=$(( $C_MAX_RATE / 3 ))
+echo "c-min-rate has been set to [${C_MIN_RATE}MiB/s]"
+
+DRBD_CONF="global
+{
+    usage-count no;
+}
+
+common
+{
+    disk
+    {
+        c-min-rate ${C_MIN_RATE}M;
+        c-max-rate ${C_MAX_RATE}M;
+        c-fill-target 1M;
+    }
+
+    net
+    {
+        max-buffers 60000;
+        after-sb-0pri discard-zero-changes;
+        after-sb-1pri consensus; cram-hmac-alg sha1;
+        shared-secret PUTyourSECREThere;
+    }
+    
+    handlers
+    {
+        split-brain "/etc/iscsi-ha/scripts/drbd-split-brain-alert";
+    }
+}
+
+resource iscsi1
+{
+    protocol C;
+
+    on ${MASTER_HOSTNAME}
+    {
+        device /dev/drbd1;
+        disk ${BLOCK_DEVICE};
+        address ${REPLICATION_MASTER_IP}:7789;
+        meta-disk internal;
+    }
+
+    on ${SLAVE_HOSTNAME}
+    {
+        device /dev/drbd1;
+        disk ${BLOCK_DEVICE};
+        address ${REPLICATION_SLAVE_IP}:7789;
+        meta-disk internal;
+    }
+}"
+
+######################################
+# Update ARP on the replication
+# network before starting replication
+######################################
+echo "Sending ARP update on replication interface"
+source /etc/iscsi-ha/iscsi-ha.load
+source /etc/iscsi-ha/iscsi-ha.func
+function log ()
+{
+	echo "ARP: $1"
+}
+send_network_bridge_arp $REPLICATION_DEV_NAME
+
+touch $DRBD_CONF_FILE
+echo "$DRBD_CONF" > $DRBD_CONF_FILE
+
+make_box "Initializing DRBD.. This host will wait until its peer connects.
+Installation will resume after the DRBD peers connect"
+
+dd if=/dev/zero bs=1M count=1 of=$BLOCK_DEVICE
+drbdadm create-md iscsi1
+service drbd start
+if [ ${KERNEL_RELEASE:0:1} -lt 3 ]
+then
+	drbdadm syncer iscsi1
+fi
+
+if [ $STATE = "master" ]
+then
+	echo -n "Synchronizing storage with peer/slave host"
+	drbdadm -- --overwrite-data-of-peer primary iscsi1
+fi
+
+#####################################
+# Start Services
+#####################################
+/etc/ha-lizard/scripts/initialize_cluster_services
+
+make_box "The final step is to create a new storage repository of type iSCSI from XenCenter 
+targeted to $REPLICATION_ISCSI_IP to complete the noSAN installation."
+
