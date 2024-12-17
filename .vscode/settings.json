@@ -34,10 +34,13 @@
 
   "cSpell.words": [
     "addsign",
+    "Costantino",
     "fromdateiso",
     "github",
     "gnupg",
+    "halizard",
     "iscsi",
+    "libexec",
     "noninteractive",
     "pgrep",
     "pipefail",
@@ -48,7 +51,9 @@
     "SRPM",
     "SRPMS",
     "strftime",
-    "tagname"
+    "tagname",
+    "uuid",
+    "uuidgen"
   ],
   "ansible.python.interpreterPath": "/bin/python3"
 }
