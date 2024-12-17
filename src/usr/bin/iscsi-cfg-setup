@@ -461,23 +461,34 @@ while [ $SUCCESS = false ]; do
 done
 
 ###################################
-# Get hostnames
+# Function to prompt for a hostname
 ###################################
-make_box "Enter the hostname for the Master and press <Enter>
-(!! Must be the configured hostname !!)"
-read MASTER_HOSTNAME
-if [ -z $MASTER_HOSTNAME ]; then
-  echo "Hostname cannot be empty. exiting"
-  exit 1
-fi
+get_hostname() {
+  local prompt="$1" # The message to display to the user
+  local hostname="" # Variable to store the entered hostname
 
-make_box "Enter the hostname for the Slave and press <Enter>
-(!! Must be the configured hostname !!)"
-read SLAVE_HOSTNAME
-if [ -z $SLAVE_HOSTNAME ]; then
-  echo "Hostname cannot be empty. exiting"
-  exit 1
-fi
+  # Display the prompt and read the input
+  make_box "$prompt"
+  read -r hostname
+
+  # Validate the hostname input
+  if [ -z "$hostname" ]; then
+    echo "Hostname cannot be empty. Exiting."
+    exit 1
+  fi
+
+  # Return the validated hostname
+  echo "$hostname"
+}
+
+###################################
+# Get hostname for Master and Slave
+###################################
+MASTER_HOSTNAME=$(get_hostname "Enter the hostname for the Master and press <Enter>
+(!! Must be the configured hostname !!)")
+
+SLAVE_HOSTNAME=$(get_hostname "Enter the hostname for the Slave and press <Enter>
+(!! Must be the configured hostname !!)")
 
 #####################################
 # Determine subnet for firewall rule
