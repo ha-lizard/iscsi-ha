@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.5.0-rc] - 2024-12-17
+
+- Enhanced directory structure by relocating configuration, documentation, and runtime files to align with standard Linux practices.
+- Refactored scripts to improve readability, maintainability, and error handling.
+- Addressed ShellCheck warnings, enhancing script quality and robustness:
+  - Fixed quoting issues to prevent word splitting and glob expansion.
+  - Replaced legacy backticks with modern `$(...)` command substitution.
+  - Transitioned to well-defined constructs for logical expressions.
+  - Optimized scripts using tools like `pgrep`, `find`, and `grep -c`.
+- Improved RPM packaging with architecture-specific builds and updated file handling.
+- Added new system configuration for TGTD override customization.
+- Created Linux man page for `iscsi-cfg` and updated documentation paths.
+
 ## [2.3.0] - 2024-12-01
 
 - Initial release for GitHub.
