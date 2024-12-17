@@ -525,34 +525,41 @@ else
 fi
 
 ######################################
-# Update firewall rules to permit traffic from hosts on the replication subnet
+# Function to update firewall rules
+# to permit traffic from the replication subnet
 ######################################
-# Inform the user about the firewall update
-echo "Adding firewall rules to allow traffic between hosts on the replication subnet."
 
-# Check if the REPLICATION_SUBNET is defined and not empty
-if [ -z "$REPLICATION_SUBNET" ]; then
-  echo "Error: REPLICATION_SUBNET is not set."
-  exit 1
-fi
+update_firewall() {
+  # Inform the user about the firewall update
+  echo "Adding firewall rules to allow traffic between hosts on the replication subnet."
 
-# Append a rule to the beginning of the INPUT table to allow traffic on replication subnet
-iptables -A INPUT -s "$REPLICATION_SUBNET" -m comment --comment "ISCSI-CFG Allow traffic from replication subnet"
+  # Check if the REPLICATION_SUBNET is defined and not empty
+  if [ -z "$REPLICATION_SUBNET" ]; then
+    echo "Error: REPLICATION_SUBNET is not set."
+    return 1
+  fi
 
-# Save the iptables rules to ensure persistence across reboots
-if ! service iptables save; then
-  echo "Error: Failed to save iptables rules."
-  exit 1
-fi
+  # Append a rule to the INPUT table to allow traffic from the replication subnet
+  iptables -A INPUT -s "$REPLICATION_SUBNET" -m comment --comment "ISCSI-CFG Allow traffic from replication subnet"
 
-# Restart the iptables service to apply the new rules
-if ! service iptables restart; then
-  echo "Error: Failed to restart iptables service."
-  exit 1
-fi
+  # Save the iptables rules to ensure persistence across reboots
+  if ! service iptables save; then
+    echo "Error: Failed to save iptables rules."
+    return 1
+  fi
 
-# Confirm successful update of firewall rules
-echo "Firewall rules have been updated successfully."
+  # Restart the iptables service to apply the new rules
+  if ! service iptables restart; then
+    echo "Error: Failed to restart iptables service."
+    return 1
+  fi
+
+  # Confirm successful update of firewall rules
+  echo "Firewall rules have been updated successfully."
+}
+
+# Call the function to execute the firewall update
+update_firewall
 
 ####################################
 # Identify the local block device
