@@ -1,4 +1,5 @@
 #!/bin/bash
+# shellcheck source=/dev/null
 ##################################################
 # HA-Lizard noSAN Installer version 2.2.1
 ##################################################
@@ -25,7 +26,9 @@
 #    along with HA-Lizard.  If not, see <http://www.gnu.org/licenses/>.
 #
 ##################################################################################################
-# shellcheck source=/dev/null
+# Load required configuration and functions
+source /etc/iscsi-ha/iscsi-ha.load
+source /etc/iscsi-ha/iscsi-ha.func
 source /usr/libexec/iscsi-ha/common_functions.sh
 #######################################
 # function remove_local_storage
@@ -809,7 +812,7 @@ drbd_select_link_speed() {
 # (ranging from 100MiB/s to 1000MiB/s or greater) and asks the user to select a
 # speed by entering the corresponding number. The selected speed is stored in
 # the variable $DISK_SPEED.
-select_disk_throughput() {
+drbd_select_disk_throughput() {
   declare -a disk_speed_list=(
     100000000  # 100MiB/s
     150000000  # 150MiB/s
@@ -949,37 +952,86 @@ EOF
   echo "DRBD configuration file has been generated at $DRBD_CONF_FILE"
 }
 
+######################################
+# Initialize DRBD Configuration and Start Replication
+# This function prepares the DRBD setup by performing:
+# - ARP updates for the replication network
+# - DRBD metadata creation
+# - Service startup
+# - Synchronization setup for master/slave hosts
+#
+# Prerequisites:
+# - Variables REPLICATION_DEV_NAME, BLOCK_DEVICE, STATE, and
+#   SLAVE_HOSTNAME must be set prior to calling this function.
+#
+# Outputs:
+# - Writes an ARP update to the replication network interface
+# - Creates DRBD metadata for the specified resource
+# - Starts the DRBD service
+# - Performs synchronization if the current state is "master"
+######################################
+drbd_initialize() {
+  # Send ARP updates for the replication network interface
+  echo "Sending ARP update on replication interface"
+  if ! send_network_bridge_arp "$REPLICATION_DEV_NAME"; then
+    echo "Error: Failed to send ARP update on $REPLICATION_DEV_NAME" >&2
+    return 1
+  fi
+
+  # Display a message indicating DRBD initialization
+  make_box "Initializing DRBD...
+This host will wait until its peer connects.
+Installation will resume after the DRBD peers connect"
+
+  # Zero out the DRBD block device to ensure a clean state
+  echo "Zeroing out DRBD block device"
+  if ! dd if=/dev/zero bs=1M count=1 of="$BLOCK_DEVICE" status=none; then
+    echo "Error: Failed to write to $BLOCK_DEVICE" >&2
+    return 1
+  fi
+
+  # Create DRBD metadata for the specified resource
+  echo "Creating DRBD metadata for iscsi1"
+  if ! drbdadm create-md iscsi1; then
+    echo "Error: Failed to create DRBD metadata for iscsi1" >&2
+    return 1
+  fi
+
+  # Start the DRBD service
+  echo "Starting DRBD service"
+  if ! service drbd start; then
+    echo "Error: Failed to start DRBD service" >&2
+    return 1
+  fi
+
+  # Additional DRBD syncer configuration for kernels older than 3.x.x
+  if [ "$(uname -r | cut -d'.' -f1)" -lt 3 ]; then
+    echo "Running drbdadm syncer for iscsi1"
+    if ! drbdadm syncer iscsi1; then
+      echo "Error: Failed to run drbdadm syncer for iscsi1" >&2
+      return 1
+    fi
+  fi
+
+  # Perform synchronization if the current state is "master"
+  if [ "$STATE" = "master" ]; then
+    echo "Synchronizing storage with peer/slave host"
+    if ! drbdadm -- --overwrite-data-of-peer primary iscsi1; then
+      echo "Error: Failed to synchronize storage as primary" >&2
+      return 1
+    fi
+  fi
+
+  echo "DRBD initialization completed successfully"
+}
+
 # TODO: Maybe use a function to format the speeds using thousand separators ?
 # example: echo "$speed" | sed ':a;s/\B[0-9]\{3\}\>/.&/;ta'
 drbd_select_link_speed
-select_disk_throughput
+drbd_select_disk_throughput
 drbd_calculate_rates
 drbd_generate_conf
-
-######################################
-# Update ARP on the replication
-# network before starting replication
-######################################
-echo "Sending ARP update on replication interface"
-source /etc/iscsi-ha/iscsi-ha.load
-source /etc/iscsi-ha/iscsi-ha.func
-
-send_network_bridge_arp $REPLICATION_DEV_NAME
-
-make_box "Initializing DRBD.. This host will wait until its peer connects.
-Installation will resume after the DRBD peers connect"
-
-dd if=/dev/zero bs=1M count=1 of=$BLOCK_DEVICE
-drbdadm create-md iscsi1
-service drbd start
-if [ ${KERNEL_RELEASE:0:1} -lt 3 ]; then
-  drbdadm syncer iscsi1
-fi
-
-if [ $STATE = "master" ]; then
-  echo -n "Synchronizing storage with peer/slave host"
-  drbdadm -- --overwrite-data-of-peer primary iscsi1
-fi
+drbd_initialize
 
 #####################################
 # Start Services
