@@ -275,14 +275,19 @@ Check if you have satisfied that the following requirements:
 echo "Press <enter> to continue or control+c to exit now"
 read NEXT
 
-REQUIRED=(awk grep ip uuidgen basename wget readlink xe tar iptables yum dd echo cat service systemctl hostname curl rpm)
-for i in ${REQUIRED[@]}; do
-  which $i >/dev/null
-  if [ $? -eq 0 ]; then
-    echo "$i found OK.."
-  else
-    echo "!! Missing Dependancy $i"
+# Check for required command dependencies
+required_commands=(awk grep ip uuidgen basename wget readlink xe tar iptables yum dd echo cat service systemctl hostname curl rpm)
+
+# Iterate over each required command
+for cmd in "${required_commands[@]}"; do
+  # Check if the command is available
+  if ! command -v "$cmd" >/dev/null; then
+    # Print message if command is missing and exit with error
+    echo "!! Missing Dependency: $cmd"
     exit 1
+  else
+    # Print message if command is found
+    echo "$cmd found OK.."
   fi
 done
 
@@ -520,14 +525,34 @@ else
 fi
 
 ######################################
-# Update firewall - allow hosts
-# on replication subnet
+# Update firewall rules to permit traffic from hosts on the replication subnet
 ######################################
-echo "Updating Firewall Rules"
-cp $IPTABLES_CONF $TMP_LOCATION/$INSTALL_UID/
-iptables -I RH-Firewall-1-INPUT $FW_RULE_POSITION -s $REPLICATION_SUBNET -j ACCEPT
-service iptables save
-service iptables restart
+# Inform the user about the firewall update
+echo "Adding firewall rules to allow traffic between hosts on the replication subnet."
+
+# Check if the REPLICATION_SUBNET is defined and not empty
+if [ -z "$REPLICATION_SUBNET" ]; then
+  echo "Error: REPLICATION_SUBNET is not set."
+  exit 1
+fi
+
+# Append a rule to the beginning of the INPUT table to allow traffic on replication subnet
+iptables -A INPUT -s "$REPLICATION_SUBNET" -m comment --comment "ISCSI-CFG Allow traffic from replication subnet"
+
+# Save the iptables rules to ensure persistence across reboots
+if ! service iptables save; then
+  echo "Error: Failed to save iptables rules."
+  exit 1
+fi
+
+# Restart the iptables service to apply the new rules
+if ! service iptables restart; then
+  echo "Error: Failed to restart iptables service."
+  exit 1
+fi
+
+# Confirm successful update of firewall rules
+echo "Firewall rules have been updated successfully."
 
 ####################################
 # Identify the local block device
