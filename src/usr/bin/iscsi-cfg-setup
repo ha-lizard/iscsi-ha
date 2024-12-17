@@ -571,27 +571,6 @@ else
 fi
 echo -e "Backing block device set to $BLOCK_DEVICE\r\n"
 
-#####################################
-# Identify LUN to be set in TGT
-#####################################
-make_box "Enter LUN to be used for exposing iSCSI storage and press <Enter>
-(Leave blank to accept default value of $ISCSI_LUN)"
-read ISCSI_LUN_OVERRIDE
-if [ $ISCSI_LUN_OVERRIDE ]; then
-  ISCSI_LUN=$ISCSI_LUN_OVERRIDE
-fi
-echo -e "LUN set to $ISCSI_LUN\r\n"
-
-#####################################
-# Insert iSCSI device config
-#####################################
-echo "############### BEGIN HALIZARD INSERTION ###############
-<target iqn.2015.com.halizard:noSAN>
-	backing-store /dev/drbd1
-	lun $ISCSI_LUN
-</target>
-############### END HALIZARD INSERTION ###############" >>$ISCSI_CONFIG_FILE
-
 ###################################
 # Update LVM Filters - block LVM
 # signatures from being read from
