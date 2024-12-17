@@ -25,38 +25,8 @@
 #    along with HA-Lizard.  If not, see <http://www.gnu.org/licenses/>.
 #
 ##################################################################################################
-
-#################################
-# function validate_ip for
-# passed in arg1. Returns 0
-# on valid IP and 1 on invalid
-################################
-function validate_ip() {
-  RESTORE_IFS=$IFS
-  IFS="."
-  IP=$1
-  IP_ARRAY=()
-
-  for i in ${IP[@]}; do
-    IP_ARRAY+=($i)
-  done
-  IFS=$RESTORE_IFS
-
-  # Make sure we have 4 array elements
-  if [ ${#IP_ARRAY[*]} -ne 4 ]; then
-    return 1
-  else
-    # Check that each octet is between 0-255
-    for i in ${IP_ARRAY[@]}; do
-      if [ $i -ge 0 ] && [ $i -le 255 ]; then
-        continue
-      else
-        return 1
-      fi
-    done
-  fi
-} #End function validate_ip
-
+# shellcheck source=/dev/null
+source /usr/libexec/iscsi-ha/common_functions.sh
 #######################################
 # function remove_local_storage
 # removes the default local SR created
@@ -275,101 +245,37 @@ function rollback_install() {
 
 } # End function rollback_install
 
-function make_box() {
-  local STRING="$*"
-  local CHAR_HORIZONTAL="-"
-  local CHAR_VERTICAL="|"
-  local NUM_ROWS=$(echo "$*" | wc -l)
+make_box "ha-lizard noSAN Automated Installer for XenServer 7
+Copyright 2021 Salvatore Costantino
+ha@pulsesupply.com
 
-  if [ $NUM_ROWS -eq 1 ]; then
-    local STRING_LEN=${#STRING}
-  else
-    #Find the length of the longest line
-    local LENGTH=0
-    RESTORE_IFS=$IFS
-    IFS=$'\n'
-    for line in ${STRING[@]}; do
-      local NEW_LENGTH=${#line}
-      if [ $NEW_LENGTH -gt $LENGTH ]; then
-        LENGTH=$NEW_LENGTH
-      fi
-    done
-    IFS=$RESTORE_IFS
-    local STRING_LEN=$LENGTH
-  fi
+ha-lizard is free software: you can redistribute it and/or modify it under
+the terms of the GNU General Public License as published by the Free
+Software Foundation, either version 3 of the License, or (at your option)
+any later version.
 
-  local HORIZ_LEN=$(($STRING_LEN + 4))
+ha-lizard is distributed in the hope that it will be useful, but WITHOUT
+ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for
+more details.
 
-  #create the top border
-  local COUNT=0
-  while [ $COUNT -lt $HORIZ_LEN ]; do
-    echo -n "$CHAR_HORIZONTAL"
-    COUNT=$(($COUNT + 1))
-  done
-  echo
+You should have received a copy of the GNU General Public License along
+with ha-lizard. If not, see <http://www.gnu.org/licenses/>.
 
-  #create the rows
-  if [ $NUM_ROWS -eq 1 ]; then
-    echo "$CHAR_VERTICAL $* $CHAR_VERTICAL"
+###########################################################################
+################# IMPORTANT - READ BELOW BEFORE PROCEEDING ################
+###########################################################################
 
-  elif [ $NUM_ROWS -gt 1 ]; then
-    RESTORE_IFS=$IFS
-    IFS=$'\n'
-    for line in ${STRING[@]}; do
-      NUM_SPACES=$(($HORIZ_LEN - ${#line} - 4))
-      COUNT=0
-      SPACE=" "
-      while [ $NUM_SPACES -gt $COUNT ]; do
-        SPACE="$SPACE "
-        COUNT=$(($COUNT + 1))
-      done
-      printf "$CHAR_VERTICAL $line$SPACE$CHAR_VERTICAL\n"
-    done
-    IFS=$RESTORE_IFS
-  fi
-
-  #create the bottom border
-  COUNT=0
-  while [ $COUNT -lt $HORIZ_LEN ]; do
-    echo -n "$CHAR_HORIZONTAL"
-    COUNT=$(($COUNT + 1))
-  done
-  echo
-} #End function make_box
-
-clear
-make_box "
- ha-lizard noSAN Automated Installer for XenServer 7
- Copyright 2021 Salvatore Costantino
- ha@pulsesupply.com
-
-
-    ha-lizard is free software: you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation, either version 3 of the License, or
-    (at your option) any later version.
-
-    ha-lizard is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with ha-lizard.  If not, see <http://www.gnu.org/licenses/>."
-
-echo -e "\r\n\r\n\r\n"
-echo "###############################################################################"
-echo "################## IMPORTANT - READ BELOW BEFORE PROCEEDING ###################"
-echo "###############################################################################"
-echo
-
-make_box "Before proceeding, check that the following requirements have been satisfied"
-make_box "- This installer requires a 2-node XenServer pool. A master and a slave.
-- Each host shall have a unique hostname set (localhost is not valid)
-- A replication interface and associated IP address should be configured for each host before proceeding
-- If you are not converting the default local storage into iSCSI-HA stotage, then
-  you should know the block device name to be used for storage before proceeding (ie. /dev/sdb)
-- If you are converting the default local storage to iSCSI-HA storage ALL data will be lost."
+Check if you have satisfied that the following requirements:
+- This installer requires a 2-node XenServer pool. A master and a slave.
+- Each host shall have a unique hostname set (localhost is not valid).
+- A replication interface and associated IP address should be configured for
+  each host before proceeding.
+- If you are not converting the default local storage into iSCSI-HA storage,
+  then you should know the block device name to be used for storage before
+  proceeding (e.g., /dev/sdb).
+- If you are converting the default local storage to iSCSI-HA storage, ALL
+ data will be lost."
 
 echo "Press <enter> to continue or control+c to exit now"
 read NEXT
