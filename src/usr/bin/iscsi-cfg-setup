@@ -633,29 +633,52 @@ Enter full path to backing block device to be used for HA storage
 }
 
 ###################################
-# Update LVM Filters - block LVM
-# signatures from being read from
-# /dev/drbd1 and $BLOCK_DEVICE
-# LVM should see LVs via iSCSI only
+# Function to update the LVM filter
+#
+# This function updates the LVM configuration by inserting a filter to block specific
+# devices. LVM should see LV (Logical Volume) only via iSCSI/TGT services.
+#
+# Parameters:
+#   $1: LVM configuration file
+#   $2: Block device path
+#
+# Returns: none
 ###################################
-for lvm_conf in ${LVM_CONF[@]}; do
-  LVM_CONF_BU_NAME=${lvm_conf//\//_}
+update_lvm_filter() {
+  local lvm_conf="$1"
+  local block_device="$2"
 
-  cp $lvm_conf $TMP_LOCATION/$INSTALL_UID/$LVM_CONF_BU_NAME
+  # Define the LVM filter string
+  local lv_filter="    filter = [ \"r|$block_device|\", \"r|/dev/drbd[0-9]*|\" ]"
 
-  TIME_STAMP=$(date +%s)
-  if [ -e ${lvm_conf}.halizard_restore ]; then
-    mv -f ${lvm_conf}.halizard_restore ${lvm_conf}.halizard_restore.$TIME_STAMP
+  # Find the line number of 'devices {' in the configuration file
+  local lvm_devices_line_begin
+  lvm_devices_line_begin=$(grep -n 'devices {' "$lvm_conf" | awk -F: '{print $1}')
+
+  # If the line is found, insert the filter line after it
+  if [ -n "$lvm_devices_line_begin" ]; then
+    local lvm_insert_row_number
+    lvm_insert_row_number=$((lvm_devices_line_begin + 1))
+    sed -i "${lvm_insert_row_number}i $lv_filter" "$lvm_conf" || {
+      echo "Error: Failed to update $lvm_conf with filter"
+      exit 1
+    }
+  else
+    echo "Error: 'devices {' not found in $lvm_conf"
+    exit 1
   fi
+}
 
-  echo "Backing up LVM configuration file $lvm_conf to $lvm_conf.halizard_restore"
-  cp $lvm_conf $lvm_conf.halizard_restore
+###################################
+# Update LVM Filters for all configuration files
+###################################
+# Iterate over each LVM configuration file
+for lvm_conf in "${LVM_CONF[@]}"; do
+  # Backup file configuration
+  backup_lvm_config "$lvm_conf"
 
-  LV_FILTER="    filter = [ \"r|$BLOCK_DEVICE|\", \"r|/dev/drbd1|\" ]"
-  LVM_DEVICES_LINE_BEGIN=$(cat -n $lvm_conf | grep 'devices {' | awk {'print $1'})
-  LVM_INSERT_ROW_NUMBER=$(($LVM_DEVICES_LINE_BEGIN + 1))
-
-  sed -i "${LVM_INSERT_ROW_NUMBER}i $LV_FILTER" $lvm_conf
+  # Update the LVM filter to block certain devices
+  update_lvm_filter "$lvm_conf" "$BLOCK_DEVICE"
 done
 
 ###################################
