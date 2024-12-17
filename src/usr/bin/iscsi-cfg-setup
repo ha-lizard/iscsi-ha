@@ -29,90 +29,92 @@
 source /usr/libexec/iscsi-ha/common_functions.sh
 #######################################
 # function remove_local_storage
-# removes the default local SR created
+# Removes the default local SR created
 # on a new XenServer installation
 #
 # Args passed in:
-# None
+#   None
 #
 # Returns:
-# 0 on success
-# 1 on general error
+#   0 on success
+#   1 on general error
 #
 # Global variable set in case a
 # rollback is required:
-# THIS_HOST_LOCAL_STORAGE_PBD_DEVICE
+#   THIS_HOST_LOCAL_STORAGE_PBD_DEVICE
 ########################################
-function remove_local_storage() {
-  THIS_HOST_LOCAL_STORAGE=$(xe sr-list type=lvm host=$THIS_HOST --minimal)
-  if [ $? -ne 0 -o -z "$THIS_HOST_LOCAL_STORAGE" ]; then
+remove_local_storage() {
+  # Get the local storage SR UUID for the host
+  this_host_local_storage=$(xe sr-list type=lvm host="$THIS_HOST" --minimal)
+  if [ -z "$this_host_local_storage" ]; then
     echo "Failed to locate SR for local storage"
     return 1
   fi
 
-  THIS_HOST_LOCAL_STORAGE_PBD=$(xe pbd-list sr-uuid=$THIS_HOST_LOCAL_STORAGE --minimal)
-  if [ $? -ne 0 -o -z "$THIS_HOST_LOCAL_STORAGE_PBD" ]; then
+  # Get the PBD UUID for the local storage SR
+  this_host_local_storage_pbd=$(xe pbd-list sr-uuid="$this_host_local_storage" --minimal)
+  if [ -z "$this_host_local_storage_pbd" ]; then
     echo "Failed to locate PBD for local storage"
     return 1
   fi
 
-  THIS_HOST_LOCAL_STORAGE_PBD_DEVICE=$(xe pbd-param-get uuid=$THIS_HOST_LOCAL_STORAGE_PBD param-name=device-config param-key=device)
-  ##########################
-  #canonicalize the path
-  ##########################
-  THIS_HOST_LOCAL_STORAGE_PBD_DEVICE=$(readlink -e $THIS_HOST_LOCAL_STORAGE_PBD_DEVICE)
-  ############################
-  # write device path to disk
-  ############################
-  if [ $? -eq 0 ]; then
-    if [ -d /etc/iscsi-ha/state ]; then
-      touch /etc/iscsi-ha/state/local_storage_device
-      echo $THIS_HOST_LOCAL_STORAGE_PBD_DEVICE >/etc/iscsi-ha/state/local_storage_device
+  # Get the device path for the PBD
+  THIS_HOST_LOCAL_STORAGE_PBD_DEVICE=$(xe pbd-param-get uuid="$this_host_local_storage_pbd" param-name=device-config param-key=device)
+
+  # Retrieve and canonicalize the device path for the specified PBD.
+  # Example: If the PBD points to a symlink like /dev/sdb1,
+  # `readlink -e` will resolve it to the canonical path, such as /dev/mapper/vg00-lv00.
+  THIS_HOST_LOCAL_STORAGE_PBD_DEVICE=$(readlink -e "$THIS_HOST_LOCAL_STORAGE_PBD_DEVICE")
+
+  # Check if the device path is valid
+  if [ -n "$THIS_HOST_LOCAL_STORAGE_PBD_DEVICE" ]; then
+    # Write device path to disk
+    if [ -d /var/lib/iscsi-ha/state ]; then
+      echo "$THIS_HOST_LOCAL_STORAGE_PBD_DEVICE" >/var/lib/iscsi-ha/state/local_storage_device
     else
-      touch /tmp/local_storage_device
-      echo $THIS_HOST_LOCAL_STORAGE_PBD_DEVICE >/tmp/local_storage_device
+      echo "$THIS_HOST_LOCAL_STORAGE_PBD_DEVICE" >/tmp/local_storage_device
     fi
   fi
 
+  # Display information for confirmation
   echo "Hostname detected = $THIS_HOST"
-  echo "Local Storage SR UUID discovered = $THIS_HOST_LOCAL_STORAGE"
-  echo "Local Storage PBD UUID discovered = $THIS_HOST_LOCAL_STORAGE_PBD"
+  echo "Local Storage SR UUID discovered = $this_host_local_storage"
+  echo "Local Storage PBD UUID discovered = $this_host_local_storage_pbd"
   echo
   echo "Press Enter to Continue"
-
-  read enter
+  read -r enter
   echo
 
-  echo "Unplugging PBD $THIS_HOST_LOCAL_STORAGE_PBD"
-  xe pbd-unplug uuid=$THIS_HOST_LOCAL_STORAGE_PBD
-  if [ $? -ne 0 ]; then
-    echo "error detected while unplugging PBD $THIS_HOST_LOCAL_STORAGE_PBD. Exiting"
+  # Unplug PBD
+  echo "Unplugging PBD $this_host_local_storage_pbd"
+  if ! xe pbd-unplug uuid="$this_host_local_storage_pbd"; then
+    echo "Error detected while unplugging PBD $this_host_local_storage_pbd. Exiting"
     return 1
   fi
   sleep 1
   echo
 
-  echo "Destroying PBD $THIS_HOST_LOCAL_STORAGE_PBD"
-  xe pbd-destroy uuid=$THIS_HOST_LOCAL_STORAGE_PBD
-  if [ $? -ne 0 ]; then
-    echo "error detected while destroying PBD $THIS_HOST_LOCAL_STORAGE_PBD. Exiting"
+  # Destroy PBD
+  echo "Destroying PBD $this_host_local_storage_pbd"
+  if ! xe pbd-destroy uuid="$this_host_local_storage_pbd"; then
+    echo "Error detected while destroying PBD $this_host_local_storage_pbd. Exiting"
     return 1
   fi
   sleep 1
   echo
-  echo "Removing Storage $THIS_HOST_LOCAL_STORAGE"
-  xe sr-forget uuid=$THIS_HOST_LOCAL_STORAGE
-  if [ $? -ne 0 ]; then
-    echo "error detected while removing storage $THIS_HOST_LOCAL_STORAGE. Exiting"
+
+  # Remove SR
+  echo "Removing Storage $this_host_local_storage"
+  if ! xe sr-forget uuid="$this_host_local_storage"; then
+    echo "Error detected while removing storage $this_host_local_storage. Exiting"
     exit 1
   fi
 
   echo "Local storage repository has been successfully removed"
   return 0
-} # end function remove_local_storage
-
+}
 ################################################
-# Function restore_local_storage
+# function restore_local_storage
 # Reinitializes the default XenServer local SR
 # in case a rollback is required to bring the
 # host's storage back to the default setting
@@ -128,32 +130,25 @@ function remove_local_storage() {
 # 1 on general error
 #
 ################################################
-function restore_local_storage() {
+restore_local_storage() {
+  local device
 
-  if [ -e /etc/iscsi-ha/state/local_storage_device ]; then
-    DEVICE=$(cat /etc/iscsi-ha/state/local_storage_device)
+  if [ -f "/etc/iscsi-ha/state/local_storage_device" ]; then
+    device="$(</etc/iscsi-ha/state/local_storage_device)"
+  elif [ -f "/tmp/local_storage_device" ]; then
+    device="$(</tmp/local_storage_device)"
   else
-    DEVICE=$(cat /tmp/local_storage_device)
-    if [ $? -ne 0 ]; then
-      echo "Missing device configuration /tmp/local_storage_device"
-      return 1
-    fi
+    printf 'Missing device configuration /tmp/local_storage_device' >&2
+    return 1
   fi
 
-  if [ $? -eq 0 ]; then
-    xe sr-create content-type=user device-config:device=$DEVICE host-uuid=$THIS_HOST_UUID name-label='Local storage' \
-      shared=false type=lvm
-
-    if [ $? -eq 0 ]; then
-      return 0
-    else
-      return 1
-    fi
-
+  if xe sr-create content-type=user device-config:device="$device" \
+    host-uuid="$THIS_HOST_UUID" name-label='Local storage' shared=false type=lvm; then
+    return 0
   else
     return 1
   fi
-} # end function restore_local_storage
+}
 
 ###########################################
 # Function rollback_install
