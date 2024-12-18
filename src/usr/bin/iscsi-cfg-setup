@@ -372,23 +372,41 @@ validate_pool_size() {
 validate_pool_size "$1"
 
 #######################################
-# Is this host Master or Slave
+# Function to check if the host is Master or Slave
+# Reads the pool configuration and determines the host's role
+#
+# Returns:
+#   0 if the status is determined successfully (Master or Slave)
+#   1 if there is an error (e.g., pool.conf is missing or improperly configured)
 #######################################
-if [ -e /etc/xensource/pool.conf ]; then
-  echo "Checking if this host is a Pool Master or Slave"
-  STATE=$(/bin/cat /etc/xensource/pool.conf)
-  echo "This host's pool status = $STATE"
-else
-  echo "/etc/xensource/pool.conf missing. Cannot determine master/slave status."
-  echo "Check that you have a properly configured pool before continuing. Exiting.."
-  exit 1
-fi
+check_host_role_in_pool() {
+  # Define the path to the pool configuration file
+  local pool_conf_file="/etc/xensource/pool.conf"
+
+  # Check if the pool configuration file exists
+  if [ -e "$pool_conf_file" ]; then
+    # Read the pool status (Master or Slave)
+    POOL_ROLE=$(cat "$pool_conf_file")
+
+    # Output the host's role in the pool
+    echo "This host's role in the pool: $POOL_ROLE"
+    return 0
+  else
+    # If the pool configuration file is missing, show an error message
+    echo "$pool_conf_file is missing. Cannot determine if the host is Master or Slave."
+    echo "Ensure that the pool is properly configured with exactly two hosts before continuing. Exiting..."
+    return 1
+  fi
+}
+
+# Call the function to check the host's role
+check_host_role_in_pool
 
 #######################################
 # Declare default values for master
 # and slave replication interfaces
 #######################################
-if [ $STATE = "master" ]; then
+if [ $POOL_ROLE = "master" ]; then
   REPLICATION_LOCAL_IP=$REPLICATION_LOCAL_IP_MASTER
   REPLICATION_REMOTE_IP=$REPLICATION_REMOTE_IP_MASTER
 else
@@ -450,7 +468,7 @@ while [ $SUCCESS = false ]; do
   fi
 done
 
-if [ $STATE = "master" ]; then
+if [ $POOL_ROLE = "master" ]; then
   REPLICATION_MASTER_IP=$REPLICATION_LOCAL_IP
   REPLICATION_SLAVE_IP=$REPLICATION_REMOTE_IP
 else
@@ -1024,7 +1042,7 @@ EOF
 # - Synchronization setup for master/slave hosts
 #
 # Prerequisites:
-# - Variables REPLICATION_DEV_NAME, BLOCK_DEVICE, STATE, and
+# - Variables REPLICATION_DEV_NAME, BLOCK_DEVICE, POOL_ROLE, and
 #   SLAVE_HOSTNAME must be set prior to calling this function.
 #
 # Outputs:
@@ -1079,7 +1097,7 @@ Installation will resume after the DRBD peers connect"
   # Perform synchronization if the current state is "master"
   # TODO: this will take a while to complete. maybe put it on background or
   # show the users the status of the sync ?
-  if [ "$STATE" = "master" ]; then
+  if [ "$POOL_ROLE" = "master" ]; then
     echo "Synchronizing storage with peer/slave host"
     if ! drbdadm -- --overwrite-data-of-peer primary iscsi1; then
       echo "Error: Failed to synchronize storage as primary" >&2
