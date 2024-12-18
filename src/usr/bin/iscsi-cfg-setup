@@ -311,21 +311,14 @@ done
 ###################################
 # Environment and default values
 ###################################
-FW_CHAIN_NAME='RH-Firewall-1-INPUT'
-FW_RULE_POSITION=$(iptables -L ${FW_CHAIN_NAME} --line-numbers | grep 'reject-with' | awk '{print $1}')
 REPLICATION_IP_MASTER='10.10.10.1' # Default IP for the master
 REPLICATION_IP_SLAVE='10.10.10.2'  # Default IP for the slave
 REPLICATION_IP_ISCSI='10.10.10.3'  # Default IP for the iSCSI shared storage
-HALIZARD_MIRROR_URL='http://halizard.org/release'
 TMP_LOCATION='/tmp/halizard_tmp_'
-KERNEL_RELEASE=$(uname -r)
-ISCSI_CONFIG_FILE='/etc/tgt/targets.conf'
-ISCSI_LUN='10'
 LVM_CONF='/etc/lvm/lvm.conf /etc/lvm/master/lvm.conf'
 DRBD_CONF_FILE='/etc/drbd.conf'
-IPTABLES_CONF='/etc/sysconfig/iptables'
+IPTABLES_RULES_FILE='/etc/sysconfig/iptables'
 INSTALL_UID=$(uuidgen)
-INSTALL_LOG=$TMP_LOCATION/$INSTALL_UID/install.log
 THIS_HOST=$(hostname)
 THIS_HOST_UUID=$(xe host-list name-label=$THIS_HOST --minimal)
 
@@ -333,7 +326,6 @@ if [ ! -d $TMP_LOCATION ]; then
   mkdir $TMP_LOCATION
 fi
 mkdir $TMP_LOCATION/$INSTALL_UID
->$INSTALL_LOG
 
 #####################################
 # Is this a rollback?
