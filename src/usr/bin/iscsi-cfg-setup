@@ -299,11 +299,9 @@ done
 ###################################
 FW_CHAIN_NAME='RH-Firewall-1-INPUT'
 FW_RULE_POSITION=$(iptables -L ${FW_CHAIN_NAME} --line-numbers | grep 'reject-with' | awk '{print $1}')
-REPLICATION_LOCAL_IP_MASTER='10.10.10.1'
-REPLICATION_LOCAL_IP_SLAVE='10.10.10.2'
-REPLICATION_REMOTE_IP_MASTER='10.10.10.2'
-REPLICATION_REMOTE_IP_SLAVE='10.10.10.1'
-REPLICATION_ISCSI_IP='10.10.10.3'
+REPLICATION_IP_MASTER='10.10.10.1' # Default IP for the master
+REPLICATION_IP_SLAVE='10.10.10.2'  # Default IP for the slave
+REPLICATION_IP_ISCSI='10.10.10.3'  # Default IP for the iSCSI shared storage
 HALIZARD_MIRROR_URL='http://halizard.org/release'
 TMP_LOCATION='/tmp/halizard_tmp_'
 KERNEL_RELEASE=$(uname -r)
@@ -402,102 +400,100 @@ check_host_role_in_pool() {
 # Call the function to check the host's role
 check_host_role_in_pool
 
-#######################################
-# Declare default values for master
-# and slave replication interfaces
-#######################################
-if [ $POOL_ROLE = "master" ]; then
-  REPLICATION_LOCAL_IP=$REPLICATION_LOCAL_IP_MASTER
-  REPLICATION_REMOTE_IP=$REPLICATION_REMOTE_IP_MASTER
-else
-  REPLICATION_LOCAL_IP=$REPLICATION_LOCAL_IP_SLAVE
-  REPLICATION_REMOTE_IP=$REPLICATION_REMOTE_IP_SLAVE
-fi
+# Prompt the user for an IP address, validate it, and assign the value to the
+# specified variable name.
+#
+# Parameters:
+#   prompt_message - The text to display when prompting the user for an IP address.
+#   default_value  - The default value to assign if the user does not enter an IP address.
+#   ip_variable_name - The name of the variable to assign the validated IP address to.
+#
+# Returns:
+#   None
+get_ip_address() {
+  local prompt_message=$1
+  local default_value=$2
+  local ip_variable_name=$3
 
-####################################
-# Read local replication IP
-####################################
-SUCCESS=false
-while [ $SUCCESS = false ]; do
+  # Local variables
+  local success=false
+  local ip_override
 
-  make_box "Enter Replication IP for this host and press <Enter>
-(leave blank to select default value of $REPLICATION_LOCAL_IP)"
-  read REPLICATION_LOCAL_IP_OVERRIDE
-  if [ $REPLICATION_LOCAL_IP_OVERRIDE ]; then
-    is_valid_ipv4 $REPLICATION_LOCAL_IP_OVERRIDE >/dev/null
-    if [ $? -ne 0 ]; then
-      echo "Invalid IP Address Specified !"
+  # Continue to prompt the user until a valid IP address is entered or the default value is chosen
+  while [ $success = false ]; do
+    make_box "$prompt_message"
+    read -r ip_override
+    if [ "$ip_override" ]; then
+      # Validate the provided IP
+      if is_valid_ipv4 "$ip_override" >/dev/null; then
+        # IP is valid
+        success=true
+        # Assign the validated IP address to the specified variable name
+        eval "$ip_variable_name"=\$ip_override
+        echo -e "$ip_variable_name set to $ip_override\r\n"
+      else
+        # IP is invalid
+        echo "Invalid IP Address Specified!"
+        sleep 1
+      fi
     else
-      SUCCESS=true
-      REPLICATION_LOCAL_IP=$REPLICATION_LOCAL_IP_OVERRIDE
-      echo -e "Local replication interface address set to $REPLICATION_LOCAL_IP\r\n"
+      success=true
+      # Assign the default value to the specified variable name
+      eval "$ip_variable_name"=\$default_value
+      echo -e "$ip_variable_name set to $default_value\r\n"
     fi
+    sleep 1
+  done
+}
+
+####################################
+# Read master replication IP
+####################################
+get_ip_address "Enter Replication IP for MASTER host and press <Enter>
+(leave blank to select default value of $REPLICATION_IP_MASTER)" $REPLICATION_IP_MASTER REPLICATION_IP_MASTER
+
+####################################
+# Read slave replication IP
+####################################
+get_ip_address "Enter Replication IP for SLAVE host and press <Enter>
+(leave blank to select default value of $REPLICATION_IP_SLAVE)" $REPLICATION_IP_SLAVE REPLICATION_IP_SLAVE
+
+# TODO: Add a function to validate if the IP addresses are active on the local and remote hosts.
+
+####################################
+# Read floating IP for iSCSI storage
+####################################
+get_ip_address "Enter Shared/Floating IP for pool storage and press <Enter>
+(leave blank to select default value of $REPLICATION_IP_ISCSI)" $REPLICATION_IP_ISCSI REPLICATION_IP_ISCSI
+
+# Function to validate the IP summary configuration
+# It prompts the user to confirm the IP values entered
+# and exit if the user chooses to cancel
+validate_ip_summary() {
+  # Display the IP summary and ask the user to confirm
+  make_box "Please review the IP configurations:
+
+Master Replication IP: $REPLICATION_IP_MASTER
+Slave Replication IP: $REPLICATION_IP_SLAVE
+Shared iSCSI IP: $REPLICATION_IP_ISCSI
+
+Are these values correct?"
+
+  # Ask the user to confirm
+  echo "Press <Enter> to confirm or any other key to cancel."
+  read -r confirmation
+
+  # If the user presses Enter (blank input), proceed
+  if [ -z "$confirmation" ]; then
+    echo "IPs configuration confirmed. Proceeding with the installation."
+    return 0 # Values confirmed
   else
-    SUCCESS=true
-    echo -e "Local replication interface address set to $REPLICATION_LOCAL_IP\r\n"
+    echo "Configuration cancelled. Exiting..."
+    exit 1 # Exit if anything other than Enter is pressed
   fi
-done
+}
 
-IP_IS_CONFIGURED=$(ip -f inet addr show | grep -c $REPLICATION_LOCAL_IP)
-if [ $IP_IS_CONFIGURED -lt 1 ]; then
-  echo "IP Address $REPLICATION_LOCAL_IP is not configured on this host."
-  echo "Configure your replication IP and interface before running installer"
-  exit 1
-fi
-
-####################################
-# Read remote replication IP
-####################################
-SUCCESS=false
-while [ $SUCCESS = false ]; do
-  make_box "Enter Replication IP for remote host and press <Enter>
-(leave blank to select default value of $REPLICATION_REMOTE_IP)"
-  read REPLICATION_REMOTE_IP_OVERRIDE
-  if [ $REPLICATION_REMOTE_IP_OVERRIDE ]; then
-    is_valid_ipv4 $REPLICATION_REMOTE_IP_OVERRIDE >/dev/null
-    if [ $? -ne 0 ]; then
-      echo "Invalid IP Address Specified !"
-    else
-      SUCCESS=true
-      REPLICATION_REMOTE_IP=$REPLICATION_REMOTE_IP_OVERRIDE
-      echo -e "Remote replication interface address set to $REPLICATION_REMOTE_IP\r\n"
-    fi
-  else
-    SUCCESS=true
-    echo -e "Remote replication interface address set to $REPLICATION_REMOTE_IP\r\n"
-  fi
-done
-
-if [ $POOL_ROLE = "master" ]; then
-  REPLICATION_MASTER_IP=$REPLICATION_LOCAL_IP
-  REPLICATION_SLAVE_IP=$REPLICATION_REMOTE_IP
-else
-  REPLICATION_MASTER_IP=$REPLICATION_REMOTE_IP
-  REPLICATION_SLAVE_IP=$REPLICATION_LOCAL_IP
-fi
-
-####################################
-# Read value for floating IP address
-####################################
-SUCCESS=false
-while [ $SUCCESS = false ]; do
-  make_box "Enter Shared/Floating IP for pool storage and press <Enter>
-(leave blank to select default value of $REPLICATION_ISCSI_IP)"
-  read REPLICATION_ISCSI_IP_OVERRIDE
-  if [ $REPLICATION_ISCSI_IP_OVERRIDE ]; then
-    is_valid_ipv4 $REPLICATION_ISCSI_IP_OVERRIDE >/dev/null
-    if [ $? -ne 0 ]; then
-      echo "Invalid IP Address Specified !"
-    else
-      SUCCESS=true
-      REPLICATION_ISCSI_IP=$REPLICATION_ISCSI_IP_OVERRIDE
-      echo -e "Shared replication interface address set to $REPLICATION_ISCSI_IP\r\n"
-    fi
-  else
-    SUCCESS=true
-    echo -e "Shared replication interface address set to $REPLICATION_ISCSI_IP\r\n"
-  fi
-done
+validate_ip_summary
 
 ###################################
 # Function to prompt for a hostname
@@ -538,24 +534,24 @@ SLAVE_HOSTNAME=$(get_hostname "Enter the hostname for the Slave and press <Enter
 #
 # Returns:
 #   0 on success
-#   1 on error (e.g., missing REPLICATION_ISCSI_IP, no suitable interfaces)
+#   1 on error (e.g., missing REPLICATION_IP_ISCSI, no suitable interfaces)
 #
 # Global variables set:
-#   REPLICATION_SUBNET        - The subnet derived from REPLICATION_ISCSI_IP
+#   REPLICATION_SUBNET        - The subnet derived from REPLICATION_IP_ISCSI
 #   REPLICATION_DEV_NAME      - The selected replication network interface
 #######################################
 determine_replication_params() {
   # Clear the terminal screen for better readability
   clear
 
-  # Ensure REPLICATION_ISCSI_IP is set
-  if [ -z "$REPLICATION_ISCSI_IP" ]; then
-    echo "Error: REPLICATION_ISCSI_IP is not set. Exiting..."
+  # Ensure REPLICATION_IP_ISCSI is set
+  if [ -z "$REPLICATION_IP_ISCSI" ]; then
+    echo "Error: REPLICATION_IP_ISCSI is not set. Exiting..."
     exit 1
   fi
 
   # Calculate the replication subnet using a 24-bit mask
-  REPLICATION_SUBNET=$(awk -F. '{print $1"."$2"."$3".0/24"}' <<<"$REPLICATION_ISCSI_IP")
+  REPLICATION_SUBNET=$(awk -F. '{print $1"."$2"."$3".0/24"}' <<<"$REPLICATION_IP_ISCSI")
   echo "Replication subnet determined: $REPLICATION_SUBNET"
 
   # Display all network interfaces with 'xapi' or 'xenbr'
@@ -775,7 +771,7 @@ done
 ###################################
 ISCSI_HA_CONF="DRBD_RESOURCES=iscsi1
 ISCSI_TARGET_SERVICE=tgtd
-DRBD_VIRTUAL_IP=$REPLICATION_ISCSI_IP
+DRBD_VIRTUAL_IP=$REPLICATION_IP_ISCSI
 DRBD_VIRTUAL_MASK=255.255.255.0
 DRBD_INTERFACE=$REPLICATION_DEV_NAME
 MONITOR_MAX_STARTS=5
@@ -976,7 +972,7 @@ drbd_calculate_rates() {
 #
 # Prerequisites:
 # - Variables C_MIN_RATE, C_MAX_RATE, MASTER_HOSTNAME, SLAVE_HOSTNAME,
-#   BLOCK_DEVICE, REPLICATION_MASTER_IP, REPLICATION_SLAVE_IP, and
+#   BLOCK_DEVICE, REPLICATION_IP_MASTER, REPLICATION_IP_SLAVE, and
 #   DRBD_CONF_FILE must be set prior to calling this function.
 #
 # Outputs:
@@ -1018,14 +1014,14 @@ resource iscsi1 {
     on ${MASTER_HOSTNAME} {
         device /dev/drbd1;
         disk ${BLOCK_DEVICE};
-        address ${REPLICATION_MASTER_IP}:7789;
+        address ${REPLICATION_IP_MASTER}:7789;
         meta-disk internal;
     }
 
     on ${SLAVE_HOSTNAME} {
         device /dev/drbd1;
         disk ${BLOCK_DEVICE};
-        address ${REPLICATION_SLAVE_IP}:7789;
+        address ${REPLICATION_IP_SLAVE}:7789;
         meta-disk internal;
     }
 }
@@ -1122,5 +1118,5 @@ drbd_initialize
 /usr/libexec/ha-lizard/initialize_cluster_services
 
 make_box "The final step involves creating a iSCSI storage repository in XenCenter,
-targeting $REPLICATION_ISCSI_IP.
+targeting $REPLICATION_IP_ISCSI.
 This completes the noSAN installation process."
