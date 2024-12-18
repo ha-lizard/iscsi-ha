@@ -40,6 +40,7 @@
     "github",
     "gnupg",
     "halizard",
+    "inet",
     "iscsi",
     "libexec",
     "noninteractive",
@@ -57,7 +58,9 @@
     "tagname",
     "urandom",
     "uuid",
-    "uuidgen"
+    "uuidgen",
+    "xapi",
+    "xenbr"
   ],
   "ansible.python.interpreterPath": "/bin/python3"
 }

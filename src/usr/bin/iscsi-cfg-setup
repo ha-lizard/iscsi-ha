@@ -493,39 +493,71 @@ MASTER_HOSTNAME=$(get_hostname "Enter the hostname for the Master and press <Ent
 SLAVE_HOSTNAME=$(get_hostname "Enter the hostname for the Slave and press <Enter>
 (!! Must be the configured hostname !!)")
 
-#####################################
-# Determine subnet for firewall rule
-# Currently assumes a 24bit mask
-#####################################
-BASE_SUBNET=$(echo $REPLICATION_ISCSI_IP | cut -d"." -f1-3)
-REPLICATION_SUBNET="$BASE_SUBNET.0/24"
+#######################################
+# Function to determine replication network parameters
+# Sets up the REPLICATION_SUBNET and REPLICATION_DEV_NAME
+#
+# Args passed in:
+#   None
+#
+# Returns:
+#   0 on success
+#   1 on error (e.g., missing REPLICATION_ISCSI_IP, no suitable interfaces)
+#
+# Global variables set:
+#   REPLICATION_SUBNET        - The subnet derived from REPLICATION_ISCSI_IP
+#   REPLICATION_DEV_NAME      - The selected replication network interface
+#######################################
+determine_replication_params() {
+  # Clear the terminal screen for better readability
+  clear
 
-#####################################
-# Determine the interface name to
-# bind the floating IP to
-#####################################
-echo "The following interfaces were found on this host"
-ip addr show | grep inet | grep 'xapi\|xenbr'
-echo
-echo "Select replication inerface"
-IF_LIST=($(ip addr show | grep 'xenbr\|xapi' | grep : | awk -F ": " {'print $2'}))
-IF_COUNT=0
-for i in ${IF_LIST[@]}; do
-  echo "Enter $IF_COUNT for interface ${IF_LIST[$IF_COUNT]}"
-  IF_COUNT=$(($IF_COUNT + 1))
-done
-IF_COUNT=$(($IF_COUNT - 1)) #decrement counter to reflect accurately array positions
+  # Ensure REPLICATION_ISCSI_IP is set
+  if [ -z "$REPLICATION_ISCSI_IP" ]; then
+    echo "Error: REPLICATION_ISCSI_IP is not set. Exiting..."
+    exit 1
+  fi
 
-echo "Enter 0 - $IF_COUNT for the desired Replication Interface"
-read SELECT_REPLICATION_DEV_NAME
+  # Calculate the replication subnet using a 24-bit mask
+  REPLICATION_SUBNET=$(awk -F. '{print $1"."$2"."$3".0/24"}' <<<"$REPLICATION_ISCSI_IP")
+  echo "Replication subnet determined: $REPLICATION_SUBNET"
 
-REPLICATION_DEV_NAME=${IF_LIST[$SELECT_REPLICATION_DEV_NAME]}
-if [ $REPLICATION_DEV_NAME ]; then
-  echo "Interface $REPLICATION_DEV_NAME selected"
-else
-  echo "Error reading selected interface. Exiting..."
-  exit 1
-fi
+  # Display all network interfaces with 'xapi' or 'xenbr'
+  echo "The following interfaces were found on this host:"
+  ip addr show | grep 'inet' | grep -E 'xapi|xenbr'
+  echo
+  echo "Select replication interface:"
+
+  # Retrieve and store all available interfaces in an array
+  mapfile -t IF_LIST < <(ip addr show | grep -E 'xenbr|xapi' | grep : | awk -F ": " '{print $2}')
+
+  # Exit if no suitable interfaces are found
+  if [ ${#IF_LIST[@]} -eq 0 ]; then
+    echo "No suitable interfaces found. Exiting..."
+    exit 1
+  fi
+
+  # Display each interface with a numeric option for selection
+  for i in "${!IF_LIST[@]}"; do
+    echo "Enter $i for interface ${IF_LIST[$i]}"
+  done
+
+  # Prompt the user to select an interface
+  echo "Enter 0 - $((${#IF_LIST[@]} - 1)) for the desired Replication Interface:"
+  read -r SELECT_REPLICATION_DEV_NAME
+
+  # Validate the user's selection and set the replication device name
+  if [[ $SELECT_REPLICATION_DEV_NAME =~ ^[0-9]+$ ]] && [ "$SELECT_REPLICATION_DEV_NAME" -ge 0 ] && [ "$SELECT_REPLICATION_DEV_NAME" -lt ${#IF_LIST[@]} ]; then
+    REPLICATION_DEV_NAME=${IF_LIST[$SELECT_REPLICATION_DEV_NAME]}
+    echo "Interface $REPLICATION_DEV_NAME selected"
+  else
+    echo "Invalid selection. Exiting..."
+    exit 1
+  fi
+}
+
+# call the function
+determine_replication_params
 
 ######################################
 # Function to update firewall rules
