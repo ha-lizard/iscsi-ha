@@ -677,8 +677,8 @@ update_lvm_filter() {
 ###################################
 # Iterate over each LVM configuration file
 for lvm_conf in "${LVM_CONF[@]}"; do
-  # Backup file configuration
-  backup_lvm_config "$lvm_conf"
+  # Backup lvm files configuration
+  backup_file "$lvm_conf"
 
   # Update the LVM filter to block certain devices
   update_lvm_filter "$lvm_conf" "$BLOCK_DEVICE"
@@ -741,14 +741,6 @@ ha-cfg set-quiet MONITOR_DELAY 15
 ha-cfg set-quiet MONITOR_MAX_STARTS 20
 ha-cfg set-quiet XAPI_COUNT 2
 ha-cfg set-quiet XAPI_DELAY 10
-
-###################################
-# Setup/Copy DRBD configuration
-# Initialize DRBD
-###################################
-# TODO: backup
-mv $DRBD_CONF_FILE ${DRBD_CONF_FILE}.backup # Backup any existing DRBD conf
-#!/bin/bash
 
 #####################################
 # This code configures DRBD (Distributed Replicated Block Device) sync speeds
@@ -906,6 +898,9 @@ drbd_calculate_rates() {
 drbd_generate_conf() {
   local -r random_password=$(tr -dc 'A-Za-z0-9!?%=' </dev/urandom | head -c 24)
 
+  # Backup the existing DRBD configuration file
+  backup_file "$DRBD_CONF_FILE"
+
   cat <<EOF >"$DRBD_CONF_FILE"
 global {
     usage-count no;
@@ -1014,6 +1009,8 @@ Installation will resume after the DRBD peers connect"
   fi
 
   # Perform synchronization if the current state is "master"
+  # TODO: this will take a while to complete. maybe put it on background or
+  # show the users the status of the sync ?
   if [ "$STATE" = "master" ]; then
     echo "Synchronizing storage with peer/slave host"
     if ! drbdadm -- --overwrite-data-of-peer primary iscsi1; then
@@ -1036,7 +1033,8 @@ drbd_initialize
 #####################################
 # Start Services
 #####################################
-/etc/ha-lizard/scripts/initialize_cluster_services
+/usr/libexec/ha-lizard/initialize_cluster_services
 
-make_box "The final step is to create a new storage repository of type iSCSI from XenCenter
-targeted to $REPLICATION_ISCSI_IP to complete the noSAN installation."
+make_box "The final step involves creating a iSCSI storage repository in XenCenter,
+targeting $REPLICATION_ISCSI_IP.
+This completes the noSAN installation process."

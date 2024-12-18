@@ -54,6 +54,7 @@
     "strftime",
     "syncer",
     "tagname",
+    "urandom",
     "uuid",
     "uuidgen"
   ],
