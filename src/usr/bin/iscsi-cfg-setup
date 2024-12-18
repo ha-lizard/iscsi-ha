@@ -542,8 +542,26 @@ update_firewall() {
     return 1
   fi
 
-  # Append a rule to the INPUT table to allow traffic from the replication subnet
-  iptables -A INPUT -s "$REPLICATION_SUBNET" -m comment --comment "ISCSI-CFG Allow traffic from replication subnet"
+  # File to back up before saving iptables rules
+  IPTABLES_RULES_FILE="/etc/sysconfig/iptables"
+
+  # Backup the iptables rules file before saving
+  if [[ -f "$IPTABLES_RULES_FILE" ]]; then
+    backup_file "$IPTABLES_RULES_FILE"
+  else
+    echo "Warning: $IPTABLES_RULES_FILE not found. Skipping backup."
+  fi
+
+  # Check if the rule already exists
+  # NOTE: iptables commands expect individual arguments for the rule components (e.g., -s, -m comment, --comment),
+  # which are not a single string. Wrapping the rule components in a single string ("$RULE") will cause a syntax error.
+  if iptables -C INPUT -s "$REPLICATION_SUBNET" -m comment --comment 'ISCSI-CFG Allow traffic from replication subnet' 2>/dev/null; then
+    echo "Firewall rule already exists. Skipping."
+  else
+    # Append the rule to the INPUT table
+    iptables -A INPUT -s "$REPLICATION_SUBNET" -m comment --comment 'ISCSI-CFG Allow traffic from replication subnet'
+    echo "Firewall rule added successfully."
+  fi
 
   # Save the iptables rules to ensure persistence across reboots
   if ! service iptables save; then

@@ -53,6 +53,7 @@
     "SRPMS",
     "strftime",
     "syncer",
+    "sysconfig",
     "tagname",
     "urandom",
     "uuid",
