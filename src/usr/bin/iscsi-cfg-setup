@@ -84,37 +84,44 @@ remove_local_storage() {
   echo "Local Storage SR UUID discovered = $this_host_local_storage"
   echo "Local Storage PBD UUID discovered = $this_host_local_storage_pbd"
   echo
-  echo "Press Enter to Continue"
-  read -r enter
-  echo
+  echo "Press <Enter> to confirm or any other key to cancel."
+  read -r confirmation
 
-  # Unplug PBD
-  echo "Unplugging PBD $this_host_local_storage_pbd"
-  if ! xe pbd-unplug uuid="$this_host_local_storage_pbd"; then
-    echo "Error detected while unplugging PBD $this_host_local_storage_pbd. Exiting"
-    return 1
+  # If the user presses Enter (blank input), proceed
+  if [ -z "$confirmation" ]; then
+
+    # Unplug PBD
+    echo "Unplugging PBD $this_host_local_storage_pbd"
+    if ! xe pbd-unplug uuid="$this_host_local_storage_pbd"; then
+      echo "Error detected while unplugging PBD $this_host_local_storage_pbd. Exiting"
+      return 1
+    fi
+    sleep 1
+    echo
+
+    # Destroy PBD
+    echo "Destroying PBD $this_host_local_storage_pbd"
+    if ! xe pbd-destroy uuid="$this_host_local_storage_pbd"; then
+      echo "Error detected while destroying PBD $this_host_local_storage_pbd. Exiting"
+      return 1
+    fi
+    sleep 1
+    echo
+
+    # Remove SR
+    echo "Removing Storage $this_host_local_storage"
+    if ! xe sr-forget uuid="$this_host_local_storage"; then
+      echo "Error detected while removing storage $this_host_local_storage. Exiting"
+      exit 1
+    fi
+
+    echo "Local storage repository has been successfully removed"
+    return 0
+  else
+    echo "Configuration cancelled. Exiting..."
+    exit 1 # Exit if anything other than Enter is pressed
   fi
-  sleep 1
-  echo
 
-  # Destroy PBD
-  echo "Destroying PBD $this_host_local_storage_pbd"
-  if ! xe pbd-destroy uuid="$this_host_local_storage_pbd"; then
-    echo "Error detected while destroying PBD $this_host_local_storage_pbd. Exiting"
-    return 1
-  fi
-  sleep 1
-  echo
-
-  # Remove SR
-  echo "Removing Storage $this_host_local_storage"
-  if ! xe sr-forget uuid="$this_host_local_storage"; then
-    echo "Error detected while removing storage $this_host_local_storage. Exiting"
-    exit 1
-  fi
-
-  echo "Local storage repository has been successfully removed"
-  return 0
 }
 ################################################
 # function restore_local_storage
@@ -275,8 +282,15 @@ Check if you have satisfied that the following requirements:
 - If you are converting the default local storage to iSCSI-HA storage, ALL
  data will be lost."
 
-echo "Press <enter> to continue or control+c to exit now"
-read NEXT
+# Ask the user to confirm
+echo "Press <Enter> to confirm or any other key to cancel."
+read -r confirmation
+
+# If the user presses anything other than Enter, exit
+if [ -n "$confirmation" ]; then
+  echo "Configuration cancelled. Exiting..."
+  exit 1
+fi
 
 # Check for required command dependencies
 required_commands=(awk grep ip uuidgen basename wget readlink xe tar iptables yum dd echo cat service systemctl hostname curl rpm)
