@@ -332,17 +332,44 @@ if [ "$1" -a -d $TMP_LOCATION/$1 ]; then
 fi
 
 ######################################
-# Check required hosts in pool
+# Function to validate the number of hosts in the pool
+# Checks if the pool contains exactly 2 hosts and whether the "--force" flag is provided.
+#
+# Args passed in:
+#   $1 - The argument passed to the script (optional; can be "--force")
+#
+# Returns:
+#   0 on success (if validation passes or if "--force" is given)
+#   1 on error (if validation fails)
+#
+# Global variables used:
+#   None
 ######################################
-POOL_HOSTS=$(xe host-list --minimal)
-if [ "$1" -a "$1" = "--force" ]; then
-  echo "Continuing with forced installation"
-elif [ ${#POOL_HOSTS} -ne 73 ]; then
-  echo "Installer requires a pool with 2 hosts. Exiting.."
-  exit 1
-else
-  echo "Pool number of host validated"
-fi
+validate_pool_size() {
+  # Get the list of hosts in the pool
+  local pool_hosts
+  pool_hosts=$(xe host-list --minimal)
+
+  # Check if the '--force' flag is provided
+  # TODO: looks like the force flag are not documented and only used here. Maybe a better name for it "--single-host"?
+  if [ "$1" = "--force" ]; then
+    echo "Continuing with forced installation"
+    return 0
+  fi
+
+  # Validate that there are exactly 2 hosts in the pool
+  if [ "$(echo "$pool_hosts" | awk -F, '{print NF}')" -ne 2 ]; then
+    echo "Installer requires a pool with exactly 2 hosts. Exiting..."
+    return 1
+  fi
+
+  # If validation passes
+  echo "Pool with 02 hosts validated"
+  return 0
+}
+
+# Call the function with the first argument (if provided)
+validate_pool_size "$1"
 
 #######################################
 # Is this host Master or Slave
@@ -368,15 +395,6 @@ else
   REPLICATION_LOCAL_IP=$REPLICATION_LOCAL_IP_SLAVE
   REPLICATION_REMOTE_IP=$REPLICATION_REMOTE_IP_SLAVE
 fi
-
-echo "Checking for latest releases of HA-Lizard components"
-ISCSIHA_RELEASE=$(curl -4s $HALIZARD_MIRROR_URL/iscsi-ha/current_release)
-HALIZARD_RELEASE=$(curl -4s $HALIZARD_MIRROR_URL/ha-lizard/current_release)
-ISCSIHA_RPM_RELEASE=$(curl -4s $HALIZARD_MIRROR_URL/iscsi-ha/current_rpm_release)
-HALIZARD_RPM_RELEASE=$(curl -4s $HALIZARD_MIRROR_URL/ha-lizard/current_rpm_release)
-
-echo -e "Found: $ISCSIHA_RELEASE $HALIZARD_RELEASE"
-echo -e "Found: $ISCSIHA_RPM_RELEASE $HALIZARD_RPM_RELEASE\r\n\r\n"
 
 ####################################
 # Read local replication IP
