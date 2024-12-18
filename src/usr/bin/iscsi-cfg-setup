@@ -437,6 +437,7 @@ get_ip_address() {
   while [ $success = false ]; do
     make_box "$prompt_message"
     read -r ip_override
+
     if [ "$ip_override" ]; then
       # Validate the provided IP
       if is_valid_ipv4 "$ip_override" >/dev/null; then
@@ -451,34 +452,49 @@ get_ip_address() {
         sleep 1
       fi
     else
-      success=true
-      # Assign the default value to the specified variable name
-      eval "$ip_variable_name"=\$default_value
-      echo -e "$ip_variable_name set to $default_value\r\n"
+      if [ -z "$default_value" ]; then
+        echo "No IP address entered and no default value provided. Please enter a valid IP address."
+        sleep 1
+      else
+        success=true
+        # Assign the default value to the specified variable name
+        eval "$ip_variable_name"=\$default_value
+        echo -e "$ip_variable_name set to $default_value\r\n"
+      fi
     fi
     sleep 1
   done
 }
 
 ####################################
-# Read master replication IP
+# Read Replication IP for MASTER Host
 ####################################
-get_ip_address "Enter Replication IP for MASTER host and press <Enter>
-(leave blank to select default value of $REPLICATION_IP_MASTER)" $REPLICATION_IP_MASTER REPLICATION_IP_MASTER
+get_ip_address "Enter the Replication IP address for the MASTER host and press <Enter>
+(leave blank to use the default value of $REPLICATION_IP_MASTER)" "$REPLICATION_IP_MASTER" REPLICATION_IP_MASTER
 
 ####################################
-# Read slave replication IP
+# Read Replication IP for SLAVE Host
 ####################################
-get_ip_address "Enter Replication IP for SLAVE host and press <Enter>
-(leave blank to select default value of $REPLICATION_IP_SLAVE)" $REPLICATION_IP_SLAVE REPLICATION_IP_SLAVE
+get_ip_address "Enter the Replication IP address for the SLAVE host and press <Enter>
+(leave blank to use the default value of $REPLICATION_IP_SLAVE)" "$REPLICATION_IP_SLAVE" REPLICATION_IP_SLAVE
 
-# TODO: Add a function to validate if the IP addresses are active on the local and remote hosts.
+# Check if the Slave Replication IP is reachable
+check_host_reachable "$REPLICATION_IP_SLAVE"
 
 ####################################
-# Read floating IP for iSCSI storage
+# Read Floating IP for iSCSI Storage
 ####################################
-get_ip_address "Enter Shared/Floating IP for pool storage and press <Enter>
-(leave blank to select default value of $REPLICATION_IP_ISCSI)" $REPLICATION_IP_ISCSI REPLICATION_IP_ISCSI
+get_ip_address "Enter the Shared/Floating IP address for iSCSI storage and press <Enter>
+(leave blank to use the default value of $REPLICATION_IP_ISCSI)" "$REPLICATION_IP_ISCSI" REPLICATION_IP_ISCSI
+
+####################################
+# Read Heuristic IP for HA-Lizard
+####################################
+get_ip_address "Enter the Heuristic IP address used by HA-Lizard and press <Enter>
+This IP should be reachable by this host over XenServer management network" "" HEURISTIC_IP
+
+# Check if the heuristic IP is reachable
+check_host_reachable "$HEURISTIC_IP"
 
 # Function to validate the IP summary configuration
 # It prompts the user to confirm the IP values entered
@@ -806,27 +822,6 @@ SMTP_PASS=""
 #END CONFIG FILE"
 
 echo "$ISCSI_HA_CONF" >/etc/iscsi-ha/iscsi-ha.conf
-
-##################################
-# Configure HA-Lizard module
-##################################
-SUCCESS=false
-while [ $SUCCESS = false ]; do
-  make_box "Enter heuristic IP address used by HA-Lizard.
-This can be any IP address reachable by this host
-by traversing the XenServer management network and press <Enter>"
-  read HEURISTIC_IP
-  is_valid_ipv4 $HEURISTIC_IP >/dev/null
-  if [ $? -ne 0 ]; then
-    echo "Invalid IP Address Specified !"
-  else
-    SUCCESS=true
-    echo -e "Heuristic IP set to $HEURISTIC_IP\r\n"
-  fi
-done
-
-echo "Press <enter> to continue installation"
-read CONTINUE
 
 ha-cfg set-quiet FENCE_ENABLED 1
 ha-cfg set-quiet FENCE_HEURISTICS_IPS $HEURISTIC_IP
