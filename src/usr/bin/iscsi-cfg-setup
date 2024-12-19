@@ -839,16 +839,6 @@ lvm_update_filter() {
   done
 }
 
-ha-cfg set-quiet FENCE_ENABLED 1
-ha-cfg set-quiet FENCE_HEURISTICS_IPS $HEURISTIC_IP
-ha-cfg set-quiet FENCE_MIN_HOSTS 2
-ha-cfg set-quiet FENCE_QUORUM_REQUIRED 1
-ha-cfg set-quiet FENCE_USE_IP_HEURISTICS 1
-ha-cfg set-quiet MONITOR_DELAY 15
-ha-cfg set-quiet MONITOR_MAX_STARTS 20
-ha-cfg set-quiet XAPI_COUNT 2
-ha-cfg set-quiet XAPI_DELAY 10
-
 #####################################
 # This code configures DRBD (Distributed Replicated Block Device) sync speeds
 # by gathering and evaluating disk throughput and replication link performance
@@ -1276,6 +1266,8 @@ else
   lvm_update_filter
   # Update the DRBD configuration with the new settings
   drbd_update_conf
+  # Set ha-cfg heuristic IP
+  ha-cfg set-quiet FENCE_HEURISTICS_IPS "$HEURISTIC_IP"
 
   # Initialize DRBD devices and settings
   drbd_initialize
