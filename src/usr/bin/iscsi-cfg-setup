@@ -161,94 +161,115 @@ restore_local_storage() {
 }
 
 ###########################################
-# Function rollback_install
-# restores any modified default config
-# files and storage repositiries back
-# to the state prior to running installer
-# Also removes any packages installed
+# Function rollback_setup
+# Restores the system to its default state by
+# removing configurations and settings applied
+# during the setup process.
 #
-# Args passed in:
-# Arg1 = installation UUID
+# This function performs the following actions:
+# - Removes the DRBD configuration file, if specified.
+# - Rolls back firewall rules with a specific comment.
+# - Removes LVM filters related to DRBD devices.
+#
+# Args:
+#   None
 #
 # Returns:
-# 0 on success
-# 1 on general error
+#   0 on successful rollback
+#   1 if any errors occur during the rollback process
 ###########################################
-function rollback_install() {
+rollback_setup() {
+  echo "Rolling back setup..."
 
-  if [ $1 ]; then
-    INSTALL_UID=$1
+  # Initialize a status variable to track overall success or failure
+  local status=0
+
+  ######################################
+  # Remove DRBD Configuration File
+  ######################################
+  # If the DRBD configuration file path is defined, attempt to remove it.
+  if [ -n "$DRBD_CONF_FILE" ]; then
+    echo "Attempting to remove DRBD configuration file: $DRBD_CONF_FILE"
+
+    # Remove the file and check for errors
+    if ! rm -f "$DRBD_CONF_FILE"; then
+      echo "Error: Failed to remove DRBD configuration file: $DRBD_CONF_FILE."
+      status=1 # Mark the operation as failed
+    else
+      echo "DRBD configuration file removed successfully."
+    fi
   else
-    echo "Missing required installation UID. Some settings may not be restored"
+    echo "No DRBD configuration file specified. Skipping."
   fi
 
-  echo "Rolling back installation..."
+  ######################################
+  # Rollback Firewall Rules
+  ######################################
+  echo "Checking and removing firewall rules with the comment 'ISCSI-CFG Allow traffic from replication subnet'..."
 
-  rm -f /etc/yum.repos.d/ha-lizard.repo
-  service iscsi-ha-watchdog stop
-  service iscsi-ha stop
-  service ha-lizard stop
-  service ha-lizard-watchdog stop
-  systemctl stop tgtd
-  service drbd stop
+  # Extract rule numbers of matching firewall rules based on the comment
+  rule_numbers=$(iptables -L INPUT --line-numbers -v -n | grep -i 'ISCSI-CFG Allow traffic from replication subnet' | awk '{print $1}' | sort -nr)
 
-  yum --enablerepo=ha-lizard-base,ha-lizard-epel -y remove scsi-target-utils
-  rm -rf /etc/tgt
-  #yum -y remove sendmail
-
-  yum remove drbd84-utils --enablerepo=ha-lizard-elrepo -y
-  yum remove drbd84-utils-sysvinit --enablerepo=ha-lizard-elrepo -y
-
-  rm -f /etc/drdb.conf*
-
-  if [ -d $TMP_LOCATION/$1 ]; then
-    FILE_LIST=$(ls $TMP_LOCATION/$INSTALL_UID)
-    for file in ${FILE_LIST[@]}; do
-      case $file in
-      #`basename $LVM_CONF`)
-      *lvm*)
-        echo "Restoring LVM configuration"
-        ###############################
-        ## replace dashes with slashes
-        ###############################
-        REAL_FILE=${file//_/\/}
-        mv -f $TMP_LOCATION/$INSTALL_UID/$file $REAL_FILE
-        ;;
-
-      $(basename $IPTABLES_CONF))
-        echo "Restoring iptables configuration"
-        mv -f $TMP_LOCATION/$INSTALL_UID/$(basename $IPTABLES_CONF) $IPTABLES_CONF
-        service iptables restart
-        ;;
-      esac
-
+  # If matching rules are found, iterate over them to remove each
+  if [ -n "$rule_numbers" ]; then
+    for rule_number in $rule_numbers; do
+      # Delete the rule and verify success
+      if iptables -D INPUT "$rule_number"; then
+        echo "Firewall rule at line $rule_number removed successfully."
+      else
+        echo "Error: Failed to remove firewall rule at line $rule_number."
+        status=1 # Mark the operation as failed
+      fi
     done
-    restore_local_storage
-    rpm -q ha-lizard --quiet
-    RETVAL=$?
-    if [ $RETVAL -eq 0 ]; then
-      rpm -e ha-lizard
-      rm -rf /etc/ha-lizard &>/dev/null
-    else
-      /etc/ha-lizard/scripts/uninstall --auto
-    fi
 
-    rpm -q iscsi-ha --quiet
-    RETVAL=$?
-    if [ $RETVAL -eq 0 ]; then
-      rpm -e iscsi-ha
-      rm -rf /etc/iscsi-ha &>/dev/null
+    # Restart the iptables service to apply changes
+    echo "Restarting iptables service..."
+    if ! service iptables restart; then
+      echo "Error: Failed to restart iptables service. Please check manually."
+      status=1 # Mark the operation as failed
     else
-      /etc/iscsi-ha/scripts/uninstall --auto
+      echo "iptables service restarted successfully."
     fi
-    echo "!!!!! Remember to delete the iSCSI SR from the pool before installing again !!!!!"
-    exit $?
   else
-    echo "No rollback data found. Some settings may not be restored"
-    exit 1
+    echo "No firewall rules found matching the specified comment. Skipping."
   fi
 
-} # End function rollback_install
+  ######################################
+  # Rollback LVM Filters
+  ######################################
+  # If the LVM configuration file path is defined, attempt to clean up the filters.
+  if [ -n "$LVM_CONF" ]; then
+    echo "Checking and removing LVM filter lines starting with 'filter = [ \"r|/dev/drbd.*|\"' from: $LVM_CONF"
+
+    # Use `sed` to locate and delete lines in the LVM configuration file
+    # that start with the specific pattern: 'filter = [ "r|/dev/drbd.*|", ...'.
+    #
+    # The regex breakdown:
+    # - ^\s*: Matches the beginning of the line and allows for leading whitespace.
+    # - filter = \[ "r|\/dev\/drbd\.\*|": Matches the exact text 'filter = [ "r|/dev/drbd.*|'.
+    # - .*$: Ensures the rest of the line (which may contain additional filters) is also matched.
+    # This ensures that only lines beginning with the specified filter format are targeted
+    if ! sed -i '/^\s*filter = \[ "r|\/dev\/drbd\.\*|".*$/d' "$LVM_CONF"; then
+      echo "Error: Failed to remove LVM filter from the configuration file: $LVM_CONF."
+      status=1 # Mark the operation as failed
+    else
+      echo "LVM filter lines removed successfully."
+    fi
+  else
+    echo "No LVM configuration file specified. Skipping."
+  fi
+
+  ######################################
+  # Final Message to the User
+  ######################################
+  # Display a reminder message for manual cleanup of iSCSI SRs
+  make_box "!!! IMPORTANT !!!
+
+Remember to delete the iSCSI SR from the pool before setting up again"
+
+  # Return the overall status of the rollback process
+  return $status
+}
 
 make_box "ha-lizard noSAN Automated Installer for XenServer 7
 Copyright 2021 Salvatore Costantino
@@ -316,7 +337,7 @@ REPLICATION_IP_SLAVE='10.10.10.2'  # Default IP for the slave
 REPLICATION_IP_ISCSI='10.10.10.3'  # Default IP for the iSCSI shared storage
 TMP_LOCATION='/tmp/halizard_tmp_'
 LVM_CONF='/etc/lvm/lvm.conf /etc/lvm/master/lvm.conf'
-DRBD_CONF_FILE='/etc/drbd.conf'
+DRBD_CONF_FILE='/etc/drbd.d/iscsi-cfg.res'
 IPTABLES_RULES_FILE='/etc/sysconfig/iptables'
 INSTALL_UID=$(uuidgen)
 THIS_HOST=$(hostname)
@@ -756,7 +777,8 @@ update_lvm_filter() {
   local block_device="$2"
 
   # Define the LVM filter string
-  local lv_filter="    filter = [ \"r|$block_device|\", \"r|/dev/drbd[0-9]*|\" ]"
+  #NOTE: do not change the order of the filter or remember to update the rollback_setup regex
+  local lv_filter="    filter = [ \"r|/dev/drbd[0-9]*|\", \"r|$block_device|\" ]"
 
   # Find the line number of 'devices {' in the configuration file
   local lvm_devices_line_begin
