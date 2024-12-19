@@ -49,6 +49,7 @@
     "libexec",
     "Mbps",
     "noninteractive",
+    "partprobe",
     "pgrep",
     "PIDS",
     "pipefail",

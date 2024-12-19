@@ -31,6 +31,7 @@
 FLAG_ROLLBACK=0
 FLAG_NO_SLAVE=0
 FLAG_IGNORE_HOST_CHECK=0
+FLAG_DESTROY_EXISTING_DATA=0
 
 # Load required configuration and functions
 source /usr/lib64/iscsi-ha/iscsi-ha.func
@@ -740,6 +741,37 @@ Enter full path to backing block device to be used for HA storage
     exit 1
   fi
 
+  # Check if the block device contains partitions or data
+  if [ -n "$(partprobe -d -s "$BLOCK_DEVICE")" ] && [ "$FLAG_DESTROY_EXISTING_DATA" -eq 0 ]; then
+    # Display a warning message to the user about data destruction
+    make_box "$(set_color "red")
+                            !!!   WARNING   !!!
+                            !!!   WARNING   !!!
+                            !!!   WARNING   !!!
+$(set_color "normal")
+
+The block device $BLOCK_DEVICE contains partitions and/or data.
+
+$(lsblk -f "$BLOCK_DEVICE")
+
+This will be $(set_color "red")ERASED$(set_color "normal") all partitions and/or data on the block device.
+
+Are you absolutely sure you want to DESTROY ALL data on $BLOCK_DEVICE?
+
+Type 'I_Want_To_Destroy' to continue or any other key to exit."
+
+    # Read user input for confirmation
+    read -r user_choice
+    if [ "$user_choice" == "I_Want_To_Destroy" ]; then
+      # Set flag to indicate user wants to destroy existing data
+      FLAG_DESTROY_EXISTING_DATA=1
+    else
+      # Exit if user chooses not to destroy data
+      echo "Exiting. Please choose another device."
+      exit 1
+    fi
+  fi
+
   # Print the block device path
   echo -e "Backing block device set to $BLOCK_DEVICE\r\n"
 }
@@ -1051,20 +1083,74 @@ drbd_initialize() {
   # Display a message indicating DRBD initialization
   make_box "Initializing DRBD...
 This host will wait until its peer connects.
-Installation will resume after the DRBD peers connect"
+Installation will resume after the DRBD peers connect."
+  sleep 1
 
-  # Zero out the DRBD block device to ensure a clean state
-  echo "Zeroing out DRBD block device"
-  if ! dd if=/dev/zero bs=1M count=1 of="$BLOCK_DEVICE" status=none; then
-    echo "Error: Failed to write to $BLOCK_DEVICE" >&2
-    return 1
+  # Check for existing DRBD metadata on the block device
+  # TODO: check the output of drbdadm dump-md
+  if drbdadm dump-md all 2>&1 | grep -q "$BLOCK_DEVICE" && [ "$FLAG_DESTROY_EXISTING_DATA" -eq 0 ]; then
+    # Warn the user about existing metadata and provide choices
+    while true; do
+      make_box "$(set_color "red")
+                           !!!   WARNING   !!!
+                           !!!   WARNING   !!!
+                           !!!   WARNING   !!!
+$(set_color "normal")
+
+This setup is intended for a new installation from scratch. However, the
+block device $BLOCK_DEVICE already contains DRBD metadata.
+
+You must choose between:
+
+- Using the existing data
+OR
+- $(set_color "red")ERASING$(set_color "normal") all data and recreating.
+
+Type one of the following options:
+'I_Want_To_Destroy_Data' to destroy data
+'Use_Data' to retain it
+'exit' to exit"
+
+      read -r user_choice
+      case "$user_choice" in
+      I_Want_To_Destroy_Data)
+        make_box "Last Time: Are you sure you want to DESTROY all data? Type 'yes' to confirm."
+        read -r user_last_opportunity_choice
+        if [ "$user_last_opportunity_choice" == "yes" ]; then
+          FLAG_DESTROY_EXISTING_DATA=1
+          break
+        fi
+        ;;
+      Use_Data)
+        FLAG_DESTROY_EXISTING_DATA=0 # Explicitly set to retain data
+        break
+        ;;
+      exit)
+        make_box "
+Exiting DRBD initialization without making changes to the disk.
+Nevertheless, some changes have been made to the system.
+You can rerun the script or revert the changes using the --rollback flag.
+"
+        exit 1
+        ;;
+      esac
+    done
   fi
 
-  # Create DRBD metadata for the specified resource
-  echo "Creating DRBD metadata for iscsi1"
-  if ! drbdadm create-md iscsi1; then
-    echo "Error: Failed to create DRBD metadata for iscsi1" >&2
-    return 1
+  if [ "$FLAG_DESTROY_EXISTING_DATA" -eq 1 ]; then
+    # Zero out the DRBD block device to ensure a clean state
+    echo "Zeroing out DRBD block device: $BLOCK_DEVICE"
+    if ! dd if=/dev/zero bs=1M count=1 of="$BLOCK_DEVICE" status=none; then
+      echo "Error: Failed to write to $BLOCK_DEVICE" >&2
+      return 1
+    fi
+
+    # Create DRBD metadata for the specified resource
+    echo "Creating DRBD metadata for iscsi1"
+    if ! drbdadm create-md iscsi1; then
+      echo "Error: Failed to create DRBD metadata for iscsi1" >&2
+      return 1
+    fi
   fi
 
   # Start the DRBD service
@@ -1095,14 +1181,13 @@ Installation will resume after the DRBD peers connect"
   fi
 
   echo "DRBD initialization completed successfully"
-
 }
 
 # TODO: Maybe use a function to format the speeds using thousand separators ?
 # example: echo "$speed" | sed ':a;s/\B[0-9]\{3\}\>/.&/;ta'
 
 # Parse command-line arguments and check if getopt failed
-if ! FLAG_TEMP=$(getopt -o "i,ns,r" --long "ignore-host-check,no-slave,rollback" -n "iscsi-cfg-setup" -- "$@"); then
+if ! FLAG_TEMP=$(getopt -o "i,ns,r" --long "destroy-existing-data,ignore-host-check,no-slave,rollback" -n "iscsi-cfg-setup" -- "$@"); then
   exit 1
 fi
 # Apply the parsed arguments
@@ -1111,7 +1196,10 @@ eval set -- "$FLAG_TEMP"
 # Now you can process the options
 while true; do
   case "$1" in
-
+  --destroy-existing-data)
+    FLAG_DESTROY_EXISTING_DATA=1
+    shift
+    ;;
   -i | --ignore-host-check)
     FLAG_IGNORE_HOST_CHECK=1
     shift
@@ -1145,6 +1233,8 @@ else
   # If any required components are missing, the script will exit.
   # Display welcome message and check if required commands are available
   welcome_check
+
+  # TODO: check if services are stopped (running the setup again)
   # Verify that all required commands are installed
   check_required_commands
   # Validate the size of the pool (ensure it contains exactly 2 hosts)
@@ -1188,7 +1278,6 @@ else
   drbd_update_conf
 
   # Initialize DRBD devices and settings
-  # TODO: Check if the user want to format the disk.
   drbd_initialize
 
   # Step 5: Start necessary services
