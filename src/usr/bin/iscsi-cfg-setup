@@ -27,8 +27,10 @@
 #
 ##################################################################################################
 # Initialize variables
-FLAG_DEBUG=0
-FLAG_SILENT=0
+
+FLAG_ROLLBACK=0
+FLAG_NO_SLAVE=0
+FLAG_IGNORE_HOST_CHECK=0
 
 # Load required configuration and functions
 source /usr/lib64/iscsi-ha/iscsi-ha.func
@@ -176,7 +178,7 @@ restore_local_storage() {
 }
 
 ###########################################
-# Function rollback_setup
+# Function setup_rollback
 # Restores the system to its default state by
 # removing configurations and settings applied
 # during the setup process.
@@ -193,7 +195,7 @@ restore_local_storage() {
 #   0 on successful rollback
 #   1 if any errors occur during the rollback process
 ###########################################
-rollback_setup() {
+setup_rollback() {
   echo "Rolling back setup..."
 
   # Initialize a status variable to track overall success or failure
@@ -359,43 +361,42 @@ check_required_commands() {
 }
 ######################################
 # Function to validate the number of hosts in the pool
-# Checks if the pool contains exactly 2 hosts and whether the "--force" flag is provided.
+# Checks if the pool contains exactly 2 hosts and whether the "--no-slave" flag is provided.
 #
 # Args passed in:
-#   $1 - The argument passed to the script (optional; can be "--force")
+#   None
 #
 # Returns:
-#   0 on success (if validation passes or if "--force" is given)
+#   0 on success (if validation passes or if "--no-slave" is set)
 #   1 on error (if validation fails)
 #
 # Global variables used:
-#   None
+#   FLAG_NO_SLAVE (global flag)
 ######################################
 check_pool_size() {
   # Get the list of hosts in the pool
   local pool_hosts
   pool_hosts=$(xe host-list --minimal)
 
-  # Check if the '--force' flag is provided
-  # TODO: looks like the force flag are not documented and only used here. Maybe a better name for it "--single-host"?
-  if [ "$1" = "--force" ]; then
-    echo "Continuing with forced installation"
+  # Check if the '--no-slave' flag is provided
+  if [ "$FLAG_NO_SLAVE" = "1" ]; then
+    echo "Flag --no-slave is set. Skipping pool size validation and continuing."
     return 0
   fi
 
   # Validate that there are exactly 2 hosts in the pool
-  if [ "$(echo "$pool_hosts" | awk -F, '{print NF}')" -ne 2 ]; then
-    echo "Installer requires a pool with exactly 2 hosts. Exiting..."
+  local host_count
+  host_count=$(echo "$pool_hosts" | awk -F, '{print NF}')
+
+  if [ "$host_count" -ne 2 ]; then
+    echo "Installer requires a pool with exactly 2 hosts. Found $host_count hosts. Exiting..."
     exit 1
   fi
 
   # If validation passes
-  echo "Pool with 02 hosts validated"
+  echo "Pool with exactly 2 hosts validated."
   return 0
 }
-
-# Call the function with the first argument (if provided)
-check_pool_size "$1"
 
 #######################################
 # Function to check if the host is Master or Slave
@@ -408,7 +409,7 @@ check_pool_size "$1"
 check_host_role_in_pool() {
   # Define the path to the pool configuration file
   local pool_conf_file="/etc/xensource/pool.conf"
-
+  # TODO: better to run this only on the master, so, validate that this is the master
   # Check if the pool configuration file exists
   if [ -e "$pool_conf_file" ]; then
     # Read the pool status (Master or Slave)
@@ -424,9 +425,6 @@ check_host_role_in_pool() {
     return 1
   fi
 }
-
-# Call the function to check the host's role
-check_host_role_in_pool
 
 # Prompt the user for an IP address, validate it, and assign the value to the
 # specified variable name.
@@ -492,9 +490,6 @@ get_ip_address "Enter the Replication IP address for the MASTER host and press <
 get_ip_address "Enter the Replication IP address for the SLAVE host and press <Enter>
 (leave blank to use the default value of $REPLICATION_IP_SLAVE)" "$REPLICATION_IP_SLAVE" REPLICATION_IP_SLAVE
 
-# Check if the Slave Replication IP is reachable
-check_host_reachable "$REPLICATION_IP_SLAVE"
-
 ####################################
 # Read Floating IP for iSCSI Storage
 ####################################
@@ -506,9 +501,6 @@ get_ip_address "Enter the Shared/Floating IP address for iSCSI storage and press
 ####################################
 get_ip_address "Enter the Heuristic IP address used by HA-Lizard and press <Enter>
 This IP should be reachable by this host over XenServer management network" "" HEURISTIC_IP
-
-# Check if the heuristic IP is reachable
-check_host_reachable "$HEURISTIC_IP"
 
 # Function to validate the IP summary configuration
 # It prompts the user to confirm the IP values entered
@@ -537,8 +529,6 @@ Are these values correct?"
   fi
 }
 
-setup_check_summary
-
 ###################################
 # Function to prompt for a hostname
 ###################################
@@ -559,7 +549,6 @@ get_hostname() {
   # Return the validated hostname
   echo "$hostname"
 }
-
 ###################################
 # Get hostname for Master and Slave
 ###################################
@@ -632,9 +621,6 @@ get_replication_params() {
   fi
 }
 
-# call the function
-get_replication_params
-
 ######################################
 # Function to update firewall rules
 # to permit traffic from the replication subnet
@@ -686,9 +672,6 @@ firewall_update() {
   # Confirm successful update of firewall rules
   echo "Firewall rules have been updated successfully."
 }
-
-# Call the function to execute the firewall update
-firewall_update
 
 ####################################
 # Identify the local block device
@@ -791,7 +774,7 @@ lvm_update_filter() {
   fi
 
   # Define the LVM filter string
-  # NOTE: do not change the order of the filter or remember to update the rollback_setup regex
+  # NOTE: do not change the order of the filter or remember to update the setup_rollback regex
   local lv_filter="    filter = [ \"r|/dev/drbd[0-9]*|\", \"r|$BLOCK_DEVICE|\" ]"
 
   # Iterate over each LVM configuration file
@@ -1115,8 +1098,11 @@ Installation will resume after the DRBD peers connect"
 
 }
 
+# TODO: Maybe use a function to format the speeds using thousand separators ?
+# example: echo "$speed" | sed ':a;s/\B[0-9]\{3\}\>/.&/;ta'
+
 # Parse command-line arguments and check if getopt failed
-if ! FLAG_TEMP=$(getopt -o "d,s" --long "debug,silent" -n "iscsi-cfg-setup" -- "$@"); then
+if ! FLAG_TEMP=$(getopt -o "i,ns,r" --long "ignore-host-check,no-slave,rollback" -n "iscsi-cfg-setup" -- "$@"); then
   exit 1
 fi
 # Apply the parsed arguments
@@ -1125,12 +1111,17 @@ eval set -- "$FLAG_TEMP"
 # Now you can process the options
 while true; do
   case "$1" in
-  -s | --silent)
-    FLAG_SILENT=1
+
+  -i | --ignore-host-check)
+    FLAG_IGNORE_HOST_CHECK=1
     shift
     ;;
-  -d | --debug)
-    FLAG_DEBUG=1
+  -ns | --no-slave)
+    FLAG_NO_SLAVE=1
+    shift
+    ;;
+  -r | --rollback)
+    FLAG_ROLLBACK=1
     shift
     ;;
   --)
@@ -1144,18 +1135,66 @@ while true; do
   esac
 done
 
-# TODO: Maybe use a function to format the speeds using thousand separators ?
-# example: echo "$speed" | sed ':a;s/\B[0-9]\{3\}\>/.&/;ta'
-drbd_get_link_speed
-drbd_get_disk_throughput
-drbd_calculate_rates
-drbd_update_conf
-drbd_initialize
+# Check if rollback mode is enabled
+if [ "$FLAG_ROLLBACK" = "1" ]; then
+  # If rollback is enabled, set up rollback procedure
+  setup_rollback
+else
+  # Step 1: Pre-configuration checks
+  # These checks ensure the system is ready for further steps.
+  # If any required components are missing, the script will exit.
+  # Display welcome message and check if required commands are available
+  welcome_check
+  # Verify that all required commands are installed
+  check_required_commands
+  # Validate the size of the pool (ensure it contains exactly 2 hosts)
+  check_pool_size
+  # Check the host role within the pool (e.g., master or slave)
+  check_host_role_in_pool
+  # If the '--ignore-host-check' flag is not set, proceed with host reachability checks
+  if [ "$FLAG_IGNORE_HOST_CHECK" -eq 1 ]; then
+    # Skip host reachability check if the flag is set
+    echo "Skipping host reachability check as '--ignore-host-check' flag is set."
+  else
+    # Check if the Slave Replication IP is reachable
+    check_host_reachable "$REPLICATION_IP_SLAVE"
+    # Check if the heuristic IP is reachable
+    check_host_reachable "$HEURISTIC_IP"
+  fi
 
-#####################################
-# Start Services
-#####################################
-/usr/libexec/ha-lizard/initialize_cluster_services
+  # Step 2: Gather necessary replication parameters
+  # These functions will prompt the user for required inputs and store them in global variables
+  # Get replication-related parameters (e.g., IPs, credentials)
+  get_replication_params
+  # Get the block device to be used for replication
+  get_block_device
+  # Get link speed for the DRBD connection
+  drbd_get_link_speed
+  # Get disk throughput for DRBD
+  drbd_get_disk_throughput
+  # Calculate DRBD rates based on system data
+  drbd_calculate_rates
+
+  # Step 3: Display summary of the current setup and ask to continue or cancel
+  setup_check_summary
+
+  # Step 4: Apply system changes
+  # Now that all checks and validations are done, we start applying configuration changes
+  # Update firewall rules to allow necessary traffic
+  firewall_update
+  # Update the LVM filter to block the specified devices
+  lvm_update_filter
+  # Update the DRBD configuration with the new settings
+  drbd_update_conf
+
+  # Initialize DRBD devices and settings
+  # TODO: Check if the user want to format the disk.
+  drbd_initialize
+
+  # Step 5: Start necessary services
+  # Finally, we initialize the cluster services (ha-cfg and iscsi-cfg)
+  /usr/libexec/ha-lizard/initialize_cluster_services
+fi
 
 make_box "The final step involves creating a iSCSI storage repository in XenCenter,
 targeting $REPLICATION_IP_ISCSI.
