@@ -27,9 +27,20 @@
 #
 ##################################################################################################
 # Load required configuration and functions
-source /etc/iscsi-ha/iscsi-ha.load
-source /etc/iscsi-ha/iscsi-ha.func
-source /usr/libexec/iscsi-ha/common_functions.sh
+
+source /usr/lib64/iscsi-ha/iscsi-ha.func
+source /usr/lib64/ha-cfg/common_functions.sh
+source /etc/iscsi-ha/iscsi-ha.conf
+# Define the path to the user local override configuration file
+LOCAL_CONFIG_FILE="/etc/iscsi-ha/iscsi-ha_local.conf"
+
+# Check if the local configuration file exists
+if [[ -f "$LOCAL_CONFIG_FILE" ]]; then
+  # Load the local configuration file
+  source "$LOCAL_CONFIG_FILE"
+  echo "Successfully loaded local configuration from '$LOCAL_CONFIG_FILE'."
+fi
+
 #######################################
 # function remove_local_storage
 # Removes the default local SR created
@@ -48,7 +59,7 @@ source /usr/libexec/iscsi-ha/common_functions.sh
 ########################################
 remove_local_storage() {
   # Get the local storage SR UUID for the host
-  this_host_local_storage=$(xe sr-list type=lvm host="$THIS_HOST" --minimal)
+  this_host_local_storage=$(xe sr-list type=lvm host="$(hostname)" --minimal)
   if [ -z "$this_host_local_storage" ]; then
     echo "Failed to locate SR for local storage"
     return 1
@@ -80,7 +91,7 @@ remove_local_storage() {
   fi
 
   # Display information for confirmation
-  echo "Hostname detected = $THIS_HOST"
+  echo "Hostname detected = $(hostname)"
   echo "Local Storage SR UUID discovered = $this_host_local_storage"
   echo "Local Storage PBD UUID discovered = $this_host_local_storage_pbd"
   echo
@@ -142,6 +153,7 @@ remove_local_storage() {
 ################################################
 restore_local_storage() {
   local device
+  local -r this_host_uuid=$(xe host-list name-label="$(hostname)" --minimal)
 
   if [ -f "/etc/iscsi-ha/state/local_storage_device" ]; then
     device="$(</etc/iscsi-ha/state/local_storage_device)"
@@ -153,7 +165,7 @@ restore_local_storage() {
   fi
 
   if xe sr-create content-type=user device-config:device="$device" \
-    host-uuid="$THIS_HOST_UUID" name-label='Local storage' shared=false type=lvm; then
+    host-uuid="$this_host_uuid" name-label='Local storage' shared=false type=lvm; then
     return 0
   else
     return 1
@@ -328,33 +340,6 @@ for cmd in "${required_commands[@]}"; do
     echo "$cmd found OK.."
   fi
 done
-
-###################################
-# Environment and default values
-###################################
-REPLICATION_IP_MASTER='10.10.10.1' # Default IP for the master
-REPLICATION_IP_SLAVE='10.10.10.2'  # Default IP for the slave
-REPLICATION_IP_ISCSI='10.10.10.3'  # Default IP for the iSCSI shared storage
-TMP_LOCATION='/tmp/halizard_tmp_'
-LVM_CONF='/etc/lvm/lvm.conf /etc/lvm/master/lvm.conf'
-DRBD_CONF_FILE='/etc/drbd.d/iscsi-cfg.res'
-IPTABLES_RULES_FILE='/etc/sysconfig/iptables'
-INSTALL_UID=$(uuidgen)
-THIS_HOST=$(hostname)
-THIS_HOST_UUID=$(xe host-list name-label=$THIS_HOST --minimal)
-
-if [ ! -d $TMP_LOCATION ]; then
-  mkdir $TMP_LOCATION
-fi
-mkdir $TMP_LOCATION/$INSTALL_UID
-
-#####################################
-# Is this a rollback?
-#####################################
-if [ "$1" -a -d $TMP_LOCATION/$1 ]; then
-  echo "Rolling back configuration"
-  rollback_install $1
-fi
 
 ######################################
 # Function to validate the number of hosts in the pool
@@ -809,33 +794,6 @@ for lvm_conf in "${LVM_CONF[@]}"; do
   # Update the LVM filter to block certain devices
   update_lvm_filter "$lvm_conf" "$BLOCK_DEVICE"
 done
-
-###################################
-# Configure iSCSI-HA module
-###################################
-ISCSI_HA_CONF="DRBD_RESOURCES=iscsi1
-ISCSI_TARGET_SERVICE=tgtd
-DRBD_VIRTUAL_IP=$REPLICATION_IP_ISCSI
-DRBD_VIRTUAL_MASK=255.255.255.0
-DRBD_INTERFACE=$REPLICATION_DEV_NAME
-MONITOR_MAX_STARTS=5
-MONITOR_DELAY=10
-MONITOR_KILLALL=1
-MONITOR_SCANRATE=5
-ENABLE_LOGGING=1
-MAIL_USE_SHARED_PARAMS=0
-MAIL_ON=1
-MAIL_SUBJECT='HA-Lizard noSAN SYSTEM ALERT - FROM HOST: $HOSTNAME'
-MAIL_FROM=root@localhost
-MAIL_TO=root@localhost
-MAIL_SCREEN_TIME=30
-SMTP_SERVER=127.0.0.1
-SMTP_PORT=25
-SMTP_USER=""
-SMTP_PASS=""
-#END CONFIG FILE"
-
-echo "$ISCSI_HA_CONF" >/etc/iscsi-ha/iscsi-ha.conf
 
 ha-cfg set-quiet FENCE_ENABLED 1
 ha-cfg set-quiet FENCE_HEURISTICS_IPS $HEURISTIC_IP
