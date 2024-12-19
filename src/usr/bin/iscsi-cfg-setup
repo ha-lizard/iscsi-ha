@@ -26,8 +26,11 @@
 #    along with HA-Lizard.  If not, see <http://www.gnu.org/licenses/>.
 #
 ##################################################################################################
-# Load required configuration and functions
+# Initialize variables
+FLAG_DEBUG=0
+FLAG_SILENT=0
 
+# Load required configuration and functions
 source /usr/lib64/iscsi-ha/iscsi-ha.func
 source /usr/lib64/ha-cfg/common_functions.sh
 source /etc/iscsi-ha/iscsi-ha.conf
@@ -283,7 +286,14 @@ Remember to delete the iSCSI SR from the pool before setting up again"
   return $status
 }
 
-make_box "ha-lizard noSAN Automated Installer for XenServer 7
+# Display the welcome message and legal information to the user. This message
+# includes the GNU Public License version 3 terms and a list of requirements
+# that must be satisfied before proceeding with the installation.
+#
+# The user is asked to confirm that they have satisfied the requirements.
+# If they press anything other than Enter, the script will exit.
+check_welcome() {
+  make_box "ha-lizard noSAN Automated Installer for XenServer 7
 Copyright 2021 Salvatore Costantino
 ha@pulsesupply.com
 
@@ -315,32 +325,38 @@ Check if you have satisfied that the following requirements:
 - If you are converting the default local storage to iSCSI-HA storage, ALL
  data will be lost."
 
-# Ask the user to confirm
-echo "Press <Enter> to confirm or any other key to cancel."
-read -r confirmation
+  # Ask the user to confirm
+  echo "Press <Enter> to confirm or any other key to cancel."
+  read -r confirmation
 
-# If the user presses anything other than Enter, exit
-if [ -n "$confirmation" ]; then
-  echo "Configuration cancelled. Exiting..."
-  exit 1
-fi
+  # If the user presses anything other than Enter, exit
+  if [ -n "$confirmation" ]; then
+    echo "Configuration cancelled. Exiting..."
+    exit 1
+  fi
+}
 
 # Check for required command dependencies
-required_commands=(awk grep ip uuidgen basename wget readlink xe tar iptables yum dd echo cat service systemctl hostname curl rpm)
+#
+# This function checks for a list of required command.
+# If any of the commands are not available, the function will exit.
+check_required_commands() {
+  # Check for required command dependencies
+  required_commands=(awk grep ip uuidgen basename wget readlink xe tar iptables yum dd echo cat service systemctl hostname curl rpm)
 
-# Iterate over each required command
-for cmd in "${required_commands[@]}"; do
-  # Check if the command is available
-  if ! command -v "$cmd" >/dev/null; then
-    # Print message if command is missing and exit with error
-    echo "!! Missing Dependency: $cmd"
-    exit 1
-  else
-    # Print message if command is found
-    echo "$cmd found OK.."
-  fi
-done
-
+  # Iterate over each required command
+  for cmd in "${required_commands[@]}"; do
+    # Check if the command is available
+    if ! command -v "$cmd" >/dev/null; then
+      # Print message if command is missing and exit with error
+      echo "!! Missing Dependency: $cmd"
+      exit 1
+    else
+      # Print message if command is found
+      echo "$cmd found OK.."
+    fi
+  done
+}
 ######################################
 # Function to validate the number of hosts in the pool
 # Checks if the pool contains exactly 2 hosts and whether the "--force" flag is provided.
@@ -355,7 +371,7 @@ done
 # Global variables used:
 #   None
 ######################################
-validate_pool_size() {
+check_pool_size() {
   # Get the list of hosts in the pool
   local pool_hosts
   pool_hosts=$(xe host-list --minimal)
@@ -370,7 +386,7 @@ validate_pool_size() {
   # Validate that there are exactly 2 hosts in the pool
   if [ "$(echo "$pool_hosts" | awk -F, '{print NF}')" -ne 2 ]; then
     echo "Installer requires a pool with exactly 2 hosts. Exiting..."
-    return 1
+    exit 1
   fi
 
   # If validation passes
@@ -379,7 +395,7 @@ validate_pool_size() {
 }
 
 # Call the function with the first argument (if provided)
-validate_pool_size "$1"
+check_pool_size "$1"
 
 #######################################
 # Function to check if the host is Master or Slave
@@ -497,7 +513,7 @@ check_host_reachable "$HEURISTIC_IP"
 # Function to validate the IP summary configuration
 # It prompts the user to confirm the IP values entered
 # and exit if the user chooses to cancel
-validate_ip_summary() {
+setup_check_summary() {
   # Display the IP summary and ask the user to confirm
   make_box "Please review the IP configurations:
 
@@ -521,7 +537,7 @@ Are these values correct?"
   fi
 }
 
-validate_ip_summary
+setup_check_summary
 
 ###################################
 # Function to prompt for a hostname
@@ -568,7 +584,7 @@ SLAVE_HOSTNAME=$(get_hostname "Enter the hostname for the Slave and press <Enter
 #   REPLICATION_SUBNET        - The subnet derived from REPLICATION_IP_ISCSI
 #   REPLICATION_DEV_NAME      - The selected replication network interface
 #######################################
-determine_replication_params() {
+get_replication_params() {
   # Clear the terminal screen for better readability
   clear
 
@@ -617,14 +633,14 @@ determine_replication_params() {
 }
 
 # call the function
-determine_replication_params
+get_replication_params
 
 ######################################
 # Function to update firewall rules
 # to permit traffic from the replication subnet
 ######################################
 
-update_firewall() {
+firewall_update() {
   # Inform the user about the firewall update
   echo "Adding firewall rules to allow traffic between hosts on the replication subnet."
 
@@ -672,7 +688,7 @@ update_firewall() {
 }
 
 # Call the function to execute the firewall update
-update_firewall
+firewall_update
 
 ####################################
 # Identify the local block device
@@ -680,7 +696,7 @@ update_firewall
 ####################################
 
 # Function to prompt for block device input
-get_block_device_input() {
+block_device_input_prompt() {
   local prompt_message="$1"
   make_box "$prompt_message"
   read -r block_device
@@ -703,7 +719,7 @@ get_block_device_input() {
 # Parameters: none
 #
 # Returns: none
-select_block_device() {
+get_block_device() {
   # Prompt for the choice to use local storage
   make_box "Convert local storage to iSCSI-HA storage? <yes or no>"
   read -r USE_LOCAL
@@ -716,7 +732,7 @@ select_block_device() {
       BLOCK_DEVICE=$(readlink -f "$THIS_HOST_LOCAL_STORAGE_PBD_DEVICE")
     else
       # Prompt the user to enter the block device path manually
-      BLOCK_DEVICE=$(get_block_device_input "
+      BLOCK_DEVICE=$(block_device_input_prompt "
 Error converting local SR to usable block device.
 Enter full path to backing block device to be used for HA storage
 (ex. /dev/sdb)")
@@ -724,7 +740,7 @@ Enter full path to backing block device to be used for HA storage
 
   elif [ "$USE_LOCAL" = "no" ]; then
     # Prompt the user to enter the block device path manually
-    BLOCK_DEVICE=$(get_block_device_input "
+    BLOCK_DEVICE=$(block_device_input_prompt "
 Enter full path to backing block device to be used for HA storage
 (ex. /dev/sdb)")
 
@@ -746,54 +762,67 @@ Enter full path to backing block device to be used for HA storage
 }
 
 ###################################
-# Function to update the LVM filter
+# Function to update the LVM filter for all configuration files
 #
-# This function updates the LVM configuration by inserting a filter to block specific
-# devices. LVM should see LV (Logical Volume) only via iSCSI/TGT services.
+# This function updates the LVM configuration files by inserting a filter to block
+# specific devices. LVM should only see logical volumes (LV) through iSCSI/TGT
+# services. The filter blocks the provided block device (via the global BLOCK_DEVICE
+# variable) and any devices matching the pattern for DRBD devices.
 #
-# Parameters:
-#   $1: LVM configuration file
-#   $2: Block device path
+# The function iterates over each configuration file listed in the global LVM_CONF
+# array and inserts the filter line after the 'devices {' section. Before updating,
+# it ensures that both the LVM_CONF and BLOCK_DEVICE variables are set and non-empty.
+# If either of them is not set, the function exits with an error.
 #
-# Returns: none
+# Returns: None
 ###################################
-update_lvm_filter() {
-  local lvm_conf="$1"
-  local block_device="$2"
+lvm_update_filter() {
 
-  # Define the LVM filter string
-  #NOTE: do not change the order of the filter or remember to update the rollback_setup regex
-  local lv_filter="    filter = [ \"r|/dev/drbd[0-9]*|\", \"r|$block_device|\" ]"
-
-  # Find the line number of 'devices {' in the configuration file
-  local lvm_devices_line_begin
-  lvm_devices_line_begin=$(grep -n 'devices {' "$lvm_conf" | awk -F: '{print $1}')
-
-  # If the line is found, insert the filter line after it
-  if [ -n "$lvm_devices_line_begin" ]; then
-    local lvm_insert_row_number
-    lvm_insert_row_number=$((lvm_devices_line_begin + 1))
-    sed -i "${lvm_insert_row_number}i $lv_filter" "$lvm_conf" || {
-      echo "Error: Failed to update $lvm_conf with filter"
-      exit 1
-    }
-  else
-    echo "Error: 'devices {' not found in $lvm_conf"
+  # Validate if BLOCK_DEVICE is set
+  if [ -z "$BLOCK_DEVICE" ]; then
+    echo "Error: BLOCK_DEVICE is not set. Exiting..."
     exit 1
   fi
+
+  # Validate if LVM_CONF is set and is an array
+  if [ -z "${LVM_CONF+x}" ] || [ ${#LVM_CONF[@]} -eq 0 ]; then
+    echo "Error: LVM_CONF is not set or is empty. Exiting..."
+    exit 1
+  fi
+
+  # Define the LVM filter string
+  # NOTE: do not change the order of the filter or remember to update the rollback_setup regex
+  local lv_filter="    filter = [ \"r|/dev/drbd[0-9]*|\", \"r|$BLOCK_DEVICE|\" ]"
+
+  # Iterate over each LVM configuration file
+  for lvm_conf in "${LVM_CONF[@]}"; do
+    # Check if the file exists
+    if [ ! -f "$lvm_conf" ]; then
+      echo "Error: $lvm_conf does not exist. Skipping..."
+      continue
+    fi
+
+    # Backup lvm files configuration
+    backup_file "$lvm_conf"
+
+    # Find the line number of 'devices {' in the configuration file
+    local lvm_devices_line_begin
+    lvm_devices_line_begin=$(grep -n 'devices {' "$lvm_conf" | awk -F: '{print $1}')
+
+    # If the line is found, insert the filter line after it
+    if [ -n "$lvm_devices_line_begin" ]; then
+      local lvm_insert_row_number
+      lvm_insert_row_number=$((lvm_devices_line_begin + 1))
+      sed -i "${lvm_insert_row_number}i $lv_filter" "$lvm_conf" || {
+        echo "Error: Failed to update $lvm_conf with filter. Exiting..."
+        exit 1
+      }
+    else
+      echo "Error: 'devices {' not found in $lvm_conf. Skipping..."
+      continue
+    fi
+  done
 }
-
-###################################
-# Update LVM Filters for all configuration files
-###################################
-# Iterate over each LVM configuration file
-for lvm_conf in "${LVM_CONF[@]}"; do
-  # Backup lvm files configuration
-  backup_file "$lvm_conf"
-
-  # Update the LVM filter to block certain devices
-  update_lvm_filter "$lvm_conf" "$BLOCK_DEVICE"
-done
 
 ha-cfg set-quiet FENCE_ENABLED 1
 ha-cfg set-quiet FENCE_HEURISTICS_IPS $HEURISTIC_IP
@@ -831,7 +860,7 @@ C_MIN_RATE_SCALE_FACTOR=3
 # by entering the corresponding number. The selected speed is stored in
 # the variable $link_speed and its byte equivalent is stored in
 # $LINK_SPEED_BYTES.
-drbd_select_link_speed() {
+drbd_get_link_speed() {
   # Replication link speed options in bps
   declare -a link_speed_list=(
     100000000   # 100Mbps
@@ -867,7 +896,7 @@ drbd_select_link_speed() {
 # (ranging from 100MiB/s to 1000MiB/s or greater) and asks the user to select a
 # speed by entering the corresponding number. The selected speed is stored in
 # the variable $DISK_SPEED.
-drbd_select_disk_throughput() {
+drbd_get_disk_throughput() {
   declare -a disk_speed_list=(
     100000000  # 100MiB/s
     150000000  # 150MiB/s
@@ -958,7 +987,7 @@ drbd_calculate_rates() {
 #
 # Outputs:
 # - Writes the DRBD configuration file to $DRBD_CONF_FILE.
-drbd_generate_conf() {
+drbd_update_conf() {
   local -r random_password=$(tr -dc 'A-Za-z0-9!?%=' </dev/urandom | head -c 24)
 
   # Backup the existing DRBD configuration file
@@ -1083,14 +1112,44 @@ Installation will resume after the DRBD peers connect"
   fi
 
   echo "DRBD initialization completed successfully"
+
 }
+
+# Parse command-line arguments and check if getopt failed
+if ! FLAG_TEMP=$(getopt -o "d,s" --long "debug,silent" -n "iscsi-cfg-setup" -- "$@"); then
+  exit 1
+fi
+# Apply the parsed arguments
+eval set -- "$FLAG_TEMP"
+
+# Now you can process the options
+while true; do
+  case "$1" in
+  -s | --silent)
+    FLAG_SILENT=1
+    shift
+    ;;
+  -d | --debug)
+    FLAG_DEBUG=1
+    shift
+    ;;
+  --)
+    shift
+    break
+    ;;
+  *)
+    echo "Invalid option $1"
+    exit 1
+    ;;
+  esac
+done
 
 # TODO: Maybe use a function to format the speeds using thousand separators ?
 # example: echo "$speed" | sed ':a;s/\B[0-9]\{3\}\>/.&/;ta'
-drbd_select_link_speed
-drbd_select_disk_throughput
+drbd_get_link_speed
+drbd_get_disk_throughput
 drbd_calculate_rates
-drbd_generate_conf
+drbd_update_conf
 drbd_initialize
 
 #####################################
