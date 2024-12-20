@@ -345,7 +345,7 @@ Check if you have satisfied that the following requirements:
 # If any of the commands are not available, the function will exit.
 check_required_commands() {
   # Check for required command dependencies
-  required_commands=(awk grep ip uuidgen basename wget readlink xe tar iptables yum dd echo cat service systemctl hostname curl rpm)
+  required_commands=(awk grep ip uuidgen basename wget readlink xe tar iptables yum dd echo cat service systemctl hostname curl rpm partprobe)
 
   # Iterate over each required command
   for cmd in "${required_commands[@]}"; do
@@ -508,11 +508,18 @@ This IP should be reachable by this host over XenServer management network" "" H
 # and exit if the user chooses to cancel
 setup_check_summary() {
   # Display the IP summary and ask the user to confirm
-  make_box "Please review the IP configurations:
+  make_box "Please review theses configurations before proceeding:
 
+Master Replication Name: $MASTER_HOSTNAME
 Master Replication IP: $REPLICATION_IP_MASTER
+Slave Replication Name: $SLAVE_HOSTNAME
 Slave Replication IP: $REPLICATION_IP_SLAVE
+
 Shared iSCSI IP: $REPLICATION_IP_ISCSI
+
+Replication Interface: $REPLICATION_DEV_NAME
+Replication Block Device: $BLOCK_DEVICE
+
 
 Are these values correct?"
 
@@ -522,7 +529,7 @@ Are these values correct?"
 
   # If the user presses Enter (blank input), proceed
   if [ -z "$confirmation" ]; then
-    echo "IPs configuration confirmed. Proceeding with the installation."
+    echo "Configuration confirmed. Proceeding with the installation."
     return 0 # Values confirmed
   else
     echo "Configuration cancelled. Exiting..."
