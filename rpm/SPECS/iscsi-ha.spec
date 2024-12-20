@@ -54,6 +54,7 @@ echo "Setting up iscsi-ha..."
 
 # Set executable permissions
 find %{_sysconfdir}/iscsi-ha -type f -name "*.sh" -exec chmod +x {} \;
+find %{_sysconfdir}/iscsi-ha/init -type f -exec chmod +x {} \;
 find %{_sysconfdir}/iscsi-ha/scripts -type f -exec chmod +x {} \;
 # Add CLI link
 ln -sf %{_sysconfdir}/iscsi-ha/scripts/iscsi-ha /usr/bin/iscsi-ha || true
