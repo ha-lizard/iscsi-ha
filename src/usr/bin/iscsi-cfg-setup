@@ -27,11 +27,11 @@
 #
 ##################################################################################################
 # Initialize variables
-
-FLAG_ROLLBACK=0
-FLAG_NO_SLAVE=0
-FLAG_IGNORE_HOST_CHECK=0
 FLAG_DESTROY_EXISTING_DATA=0
+FLAG_DRY_RUN=0
+FLAG_IGNORE_HOST_CHECK=0
+FLAG_NO_SLAVE=0
+FLAG_ROLLBACK=0
 
 # Load required configuration and functions
 source /usr/lib64/iscsi-ha/iscsi-ha.func
@@ -1184,7 +1184,7 @@ You can rerun the script or revert the changes using the --rollback flag.
 # example: echo "$speed" | sed ':a;s/\B[0-9]\{3\}\>/.&/;ta'
 
 # Parse command-line arguments and check if getopt failed
-if ! FLAG_TEMP=$(getopt -o "i,ns,r" --long "destroy-existing-data,ignore-host-check,no-slave,rollback" -n "iscsi-cfg-setup" -- "$@"); then
+if ! FLAG_TEMP=$(getopt -o "i,ns,r" --long "destroy-existing-data,dry-run,ignore-host-check,no-slave,rollback" -n "iscsi-cfg-setup" -- "$@"); then
   exit 1
 fi
 # Apply the parsed arguments
@@ -1195,6 +1195,10 @@ while true; do
   case "$1" in
   --destroy-existing-data)
     FLAG_DESTROY_EXISTING_DATA=1
+    shift
+    ;;
+  --dry-run)
+    FLAG_DRY_RUN=1
     shift
     ;;
   -i | --ignore-host-check)
@@ -1264,6 +1268,12 @@ else
 
   # Step 3: Display summary of the current setup and ask to continue or cancel
   setup_check_summary
+
+  # If the '--dry-run' flag is set, exit the script
+  if [ "$FLAG_DRY_RUN" -eq 1 ]; then
+    echo "Dry run completed. Exiting..."
+    exit 0
+  fi
 
   # Step 4: Apply system changes
   # Now that all checks and validations are done, we start applying configuration changes
