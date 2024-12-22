@@ -1,7 +1,7 @@
 #!/bin/bash
 # shellcheck source=/dev/null
 ##################################################
-# HA-Lizard noSAN Installer version 2.2.1
+# HA-Lizard noSAN Installer version __VERSION__
 ##################################################
 #################################################################################################
 #
@@ -62,7 +62,7 @@ fi
 # The user is asked to confirm that they have satisfied the requirements.
 # If they press anything other than Enter, the script will exit.
 check_welcome() {
-  make_box "ha-lizard noSAN Automated Installer for XenServer 7
+  make_box "ha-lizard noSAN Automated Installer for XenServer/XCP-ng
 Copyright 2021 Salvatore Costantino
 ha@pulsesupply.com
 
@@ -112,7 +112,8 @@ Check if you have satisfied that the following requirements:
 check_required_commands() {
   # Check for required command dependencies
   required_commands=(awk grep ip uuidgen basename wget readlink xe tar iptables yum dd echo cat service systemctl hostname curl rpm partprobe)
-
+  clear
+  echo "Checking for required dependencies..."
   # Iterate over each required command
   for cmd in "${required_commands[@]}"; do
     # Check if the command is available
@@ -125,6 +126,7 @@ check_required_commands() {
       echo "$cmd found OK.."
     fi
   done
+  sleep 1
 }
 
 #######################################
@@ -221,42 +223,48 @@ check_pool_size() {
 #   SERVER_TWO_HOSTNAME - The validated hostname for the server TWO.
 ###################################
 get_hostname() {
-  local hostname="" # Variable to store the entered hostname
-  local hostname_regex='^([a-zA-Z0-9]([-a-zA-Z0-9]*[a-zA-Z0-9])?\.)*[a-zA-Z0-9]([-a-zA-Z0-9]*[a-zA-Z0-9])?$'
-
   # Function to get and validate a single hostname
   get_single_hostname() {
     # The message to display to the user
     local prompt="$1"
+    local hostname_variable_name="$2"
+    local success=false
+    local hostname="" # Variable to store the entered hostname
+    local hostname_regex='^([a-zA-Z0-9]([-a-zA-Z0-9]*[a-zA-Z0-9])?\.)*[a-zA-Z0-9]([-a-zA-Z0-9]*[a-zA-Z0-9])?$'
 
-    # Display the prompt and read the input
-    make_box "$prompt"
-    read -r hostname
+    # Loop until a valid hostname is entered
+    while [ "$success" = false ]; do
+      make_box "Enter the hostname for the $prompt and press <Enter>
+(!! Must be the configured hostname !!)"
+      # Read the input from the user
+      read -p "$prompt: " -r hostname
 
-    # Validate the hostname input
-    if [ -z "$hostname" ]; then
-      echo "Hostname cannot be empty. Exiting."
-      exit 1
-    fi
+      # Validate the hostname input
+      if [ -z "$hostname" ]; then
+        # Check if the hostname is empty
+        echo -e "Error: Hostname cannot be empty. Please enter a valid hostname."
+      elif [[ ${#hostname} -gt 253 ]]; then
+        # Check if the hostname is too long (RFC 1123 allows a maximum of 253 characters)
+        echo -e "Error: Hostname is too long. It must be 253 characters or fewer."
+      elif ! [[ $hostname =~ $hostname_regex ]]; then
+        # Check if the hostname matches the RFC 1123 format
+        echo -e "Error: Invalid hostname format. A hostname can only contain alphanumeric characters, dots, and hyphens."
+      else
+        # If all validations pass, the hostname is valid
+        success=true
+        # Set the value of the variable dynamically
+        eval "$hostname_variable_name=\$hostname"
+      fi
 
-    if [[ ${#hostname} -gt 253 ]]; then
-      echo "Hostname is too long. Must be 253 characters or fewer. Exiting."
-      exit 1
-    fi
-
-    if ! [[ $hostname =~ $hostname_regex ]]; then
-      echo "Invalid hostname. A hostname can only contain alphanumeric characters, dots, and hyphens, and must adhere to RFC 1123. Exiting."
-      exit 1
-    fi
-
-    echo "$hostname" # Return the validated hostname
+      # If there is a error, pause for 2 seconds.
+      $success || sleep 2
+    done
   }
 
   # Get hostname for Master server
-  SERVER_ONE_HOSTNAME=$(get_single_hostname "Enter the hostname for the Server ONE and press <Enter> (!! Must be the configured hostname !!)")
-
+  get_single_hostname "Server ONE" SERVER_ONE_HOSTNAME
   # Get hostname for Slave server
-  SERVER_TWO_HOSTNAME=$(get_single_hostname "Enter the hostname for the Server TWO and press <Enter> (!! Must be the configured hostname !!)")
+  get_single_hostname "Server TWO" SERVER_TWO_HOSTNAME
 }
 
 # Prompt the user for an IP address, validate it, and assign the value to the
@@ -281,13 +289,12 @@ get_ip_address() {
     # Loop until a valid IP is entered or the default value is used
     while [ "$success" = false ]; do
       make_box "$prompt_message"
-      read -r ip_override
+      read -r -p "IP address: " ip_override
 
       if [ "$ip_override" ]; then
         if is_valid_ipv4 "$ip_override"; then
           success=true
           eval "$ip_variable_name"=\$ip_override
-          echo -e "$ip_variable_name set to $ip_override\r\n"
         else
           echo "Invalid IP Address Specified!"
           sleep 1
@@ -299,7 +306,6 @@ get_ip_address() {
         else
           success=true
           eval "$ip_variable_name"=\$default_value
-          echo -e "$ip_variable_name set to $default_value\r\n"
         fi
       fi
       sleep 1
@@ -437,14 +443,6 @@ get_replication_params() {
   fi
 }
 
-# Function to prompt for block device input
-block_device_input_prompt() {
-  local prompt_message="$1"
-  make_box "$prompt_message"
-  read -r block_device
-  echo "$block_device"
-}
-
 # Function to handle the process of selecting a block device
 #
 # This function prompts the user to select a block device for HA storage.
@@ -462,47 +460,53 @@ block_device_input_prompt() {
 #
 # Returns: none
 get_block_device() {
-  # Prompt for the choice to use local storage
-  make_box "Convert local storage to iSCSI-HA storage? <yes or no>"
-  read -r USE_LOCAL
+  local success=false
 
-  # Handle the user input for local storage selection
-  if [ "$USE_LOCAL" = "yes" ]; then
-    # Try to convert the local storage to HA storage
-    if remove_local_storage; then
-      # If the conversion is successful, retrieve the block device path
-      BLOCK_DEVICE=$(readlink -f "$THIS_HOST_LOCAL_STORAGE_PBD_DEVICE")
-    else
-      # Prompt the user to enter the block device path manually
-      BLOCK_DEVICE=$(block_device_input_prompt "
-Error converting local SR to usable block device.
+  # Loop until a valid hostname is entered
+  while [ "$success" = false ]; do
+    # Prompt for the choice to use local storage
+    make_box "Convert local storage to iSCSI-HA storage? <yes> or <no>"
+    read -r USE_LOCAL
+
+    # Handle the user input for local storage selection
+    if [ "$USE_LOCAL" = "yes" ]; then
+      # Try to convert the local storage to HA storage
+      if remove_local_storage; then
+        # If the conversion is successful, retrieve the block device path
+        BLOCK_DEVICE=$(readlink -f "$THIS_HOST_LOCAL_STORAGE_PBD_DEVICE")
+        success=true
+      else
+        # Prompt the user to enter the block device path manually
+        make_box "Error converting local SR to usable block device.
 Enter full path to backing block device to be used for HA storage
-(ex. /dev/sdb)")
+(ex. /dev/sdb)"
+        read -r BLOCK_DEVICE
+      fi
+
+    elif [ "$USE_LOCAL" = "no" ]; then
+      # Prompt the user to enter the block device path manually
+      make_box "Enter full path to backing block device to be used for HA storage
+(ex. /dev/sdb)"
+      read -r BLOCK_DEVICE
+    else
+      # Handle invalid input
+      echo "Invalid entry. Please enter 'yes' or 'no'."
+      sleep 2
+      continue
     fi
 
-  elif [ "$USE_LOCAL" = "no" ]; then
-    # Prompt the user to enter the block device path manually
-    BLOCK_DEVICE=$(block_device_input_prompt "
-Enter full path to backing block device to be used for HA storage
-(ex. /dev/sdb)")
+    # Validate the block device path
+    if [ -z "$BLOCK_DEVICE" ] || [ ! -e "$BLOCK_DEVICE" ]; then
+      # Handle invalid block device paths
+      echo "Error: Invalid block device! Either it is not specified or the path is invalid."
+      sleep 2
+      continue
+    fi
 
-  else
-    # Handle invalid input
-    echo "Invalid entry - exiting"
-    exit 1
-  fi
-
-  # Validate the block device path
-  if [ -z "$BLOCK_DEVICE" ] || [ ! -e "$BLOCK_DEVICE" ]; then
-    # Handle invalid block device paths
-    echo "Error: Invalid block device! Either it is not specified or the path is invalid. Exiting.."
-    exit 1
-  fi
-
-  # Check if the block device contains partitions or data
-  if [ -n "$(partprobe -d -s "$BLOCK_DEVICE")" ] && [ "$FLAG_DESTROY_EXISTING_DATA" -eq 0 ]; then
-    # Display a warning message to the user about data destruction
-    make_box "$(set_color "red")
+    # Check if the block device contains partitions or data
+    if [ -n "$(partprobe -d -s "$BLOCK_DEVICE")" ] && [ "$FLAG_DESTROY_EXISTING_DATA" -eq 0 ]; then
+      # Display a warning message to the user about data destruction
+      make_box "$(set_color "red")
                             !!!   WARNING   !!!
                             !!!   WARNING   !!!
                             !!!   WARNING   !!!
@@ -518,18 +522,27 @@ Are you absolutely sure you want to DESTROY ALL data on $BLOCK_DEVICE?
 
 Type 'I_Want_To_Destroy' to continue or any other key to exit."
 
-    # Read user input for confirmation
-    read -r user_choice
-    if [ "$user_choice" == "I_Want_To_Destroy" ]; then
-      # Set flag to indicate user wants to destroy existing data
-      FLAG_DESTROY_EXISTING_DATA=1
+      # Read user input for confirmation
+      read -r user_choice
+      if [ "$user_choice" == "I_Want_To_Destroy" ]; then
+        # Set flag to indicate user wants to destroy existing data
+        FLAG_DESTROY_EXISTING_DATA=1
+        success=true
+      else
+        # Exit if user chooses not to destroy data
+        echo "Please choose another device."
+        sleep 2
+        continue
+      fi
+    # The disk don't contain partitions or data
     else
-      # Exit if user chooses not to destroy data
-      echo "Exiting. Please choose another device."
-      exit 1
+      success=true
     fi
-  fi
 
+    # If there is a error, pause for 2 seconds.
+    $success || sleep 2
+
+  done
   # Print the block device path
   echo -e "Backing block device set to $BLOCK_DEVICE\r\n"
 }
@@ -568,10 +581,7 @@ $(set_color "yellow")Active SLAVE: $ACTIVE_SLAVE_NAME ($ACTIVE_SLAVE_IP) $(set_c
 Shared iSCSI IP: $REPLICATION_IP_ISCSI
 
 Replication Interface: $REPLICATION_DEV_NAME
-$(set_color "green") Replication Block Device: $BLOCK_DEVICE $(set_color "normal")
-
-
-Are these values correct?"
+$(set_color "red")Replication Block Device: $BLOCK_DEVICE $(set_color "normal")"
 
   # Ask the user to confirm
   echo "Press <Enter> to confirm or any other key to cancel."
