@@ -216,11 +216,11 @@ check_pool_size() {
 #
 # This function prompts the user to enter the hostname for both servers
 # validates them according to RFC 1123 and other criteria, and stores them
-# in the SERVER_ONE_HOSTNAME and SERVER_TWO_HOSTNAME variables.
+# in the SERVER_ONE_NAME and SERVER_TWO_NAME variables.
 #
 # Returns:
-#   SERVER_ONE_HOSTNAME - The validated hostname for the server ONE.
-#   SERVER_TWO_HOSTNAME - The validated hostname for the server TWO.
+#   SERVER_ONE_NAME - The validated hostname for the server ONE.
+#   SERVER_TWO_NAME - The validated hostname for the server TWO.
 ###################################
 get_hostname() {
   # Function to get and validate a single hostname
@@ -262,9 +262,9 @@ get_hostname() {
   }
 
   # Get hostname for Master server
-  get_single_hostname "Server ONE" SERVER_ONE_HOSTNAME
+  get_single_hostname "Server ONE" SERVER_ONE_NAME
   # Get hostname for Slave server
-  get_single_hostname "Server TWO" SERVER_TWO_HOSTNAME
+  get_single_hostname "Server TWO" SERVER_TWO_NAME
 }
 
 # Prompt the user for an IP address, validate it, and assign the value to the
@@ -314,11 +314,11 @@ get_ip_address() {
 
   # Get Replication IP for MASTER host
   get_single_ip "Enter the Replication IP address for the Server ONE host and press <Enter>
-(leave blank to use the default value of $REPLICATION_IP_SERVER_ONE)" "$REPLICATION_IP_SERVER_ONE" REPLICATION_IP_SERVER_ONE
+(leave blank to use the default value of $SERVER_ONE_IP)" "$SERVER_ONE_IP" SERVER_ONE_IP
 
   # Get Replication IP for SLAVE host
   get_single_ip "Enter the Replication IP address for the Server TWO host and press <Enter>
-(leave blank to use the default value of $REPLICATION_IP_SERVER_TWO)" "$REPLICATION_IP_SERVER_TWO" REPLICATION_IP_SERVER_TWO
+(leave blank to use the default value of $SERVER_TWO_IP)" "$SERVER_TWO_IP" SERVER_TWO_IP
 
   # Get Floating IP for iSCSI storage
   get_single_ip "Enter the Shared/Floating IP address for iSCSI storage and press <Enter>
@@ -335,10 +335,10 @@ This IP should be reachable by this host over XenServer management network" "" H
 # and which is the slave. Validates that the replication IPs are set and valid.
 #
 # Globals:
-#   REPLICATION_IP_SERVER_ONE (IP of the first server)
-#   REPLICATION_IP_SERVER_TWO (IP of the second server)
-#   SERVER_ONE_HOSTNAME (Hostname of the first server)
-#   SERVER_TWO_HOSTNAME (Hostname of the second server)
+#   SERVER_ONE_IP (IP of the first server)
+#   SERVER_TWO_IP (IP of the second server)
+#   SERVER_ONE_NAME (Hostname of the first server)
+#   SERVER_TWO_NAME (Hostname of the second server)
 #   ACTIVE_MASTER_NAME (Output: Hostname of the active master)
 #   ACTIVE_MASTER_IP (Output: IP of the active master)
 #   ACTIVE_SLAVE_NAME (Output: Hostname of the active slave)
@@ -350,31 +350,31 @@ This IP should be reachable by this host over XenServer management network" "" H
 #######################################
 check_active_master_slave() {
   # Ensure all required variables are set
-  if [ -z "${REPLICATION_IP_SERVER_ONE:-}" ] || [ -z "${REPLICATION_IP_SERVER_TWO:-}" ] || [ -z "${SERVER_ONE_HOSTNAME:-}" ] || [ -z "${SERVER_TWO_HOSTNAME:-}" ]; then
+  if [ -z "${SERVER_ONE_IP:-}" ] || [ -z "${SERVER_TWO_IP:-}" ] || [ -z "${SERVER_ONE_NAME:-}" ] || [ -z "${SERVER_TWO_NAME:-}" ]; then
     echo "Error: One or more required variables are not set."
-    echo "Please ensure that REPLICATION_IP_SERVER_ONE, REPLICATION_IP_SERVER_TWO, SERVER_ONE_HOSTNAME, and SERVER_TWO_HOSTNAME are all set. Exiting..."
+    echo "Please ensure that SERVER_ONE_IP, SERVER_TWO_IP, SERVER_ONE_NAME, and SERVER_TWO_NAME are all set. Exiting..."
     exit 1
   fi
 
-  # Check if the current server matches REPLICATION_IP_SERVER_ONE
-  if ip -4 addr show to "$REPLICATION_IP_SERVER_ONE" >/dev/null 2>&1; then
+  # Check if the current server matches SERVER_ONE_IP
+  if ip -4 addr show to "$SERVER_ONE_IP" >/dev/null 2>&1; then
     # Set master and slave details based on SERVER_ONE as master
-    ACTIVE_MASTER_NAME="$SERVER_ONE_HOSTNAME"
-    ACTIVE_MASTER_IP="$REPLICATION_IP_SERVER_ONE"
-    ACTIVE_SLAVE_NAME="$SERVER_TWO_HOSTNAME"
-    ACTIVE_SLAVE_IP="$REPLICATION_IP_SERVER_TWO"
+    ACTIVE_MASTER_NAME="$SERVER_ONE_NAME"
+    ACTIVE_MASTER_IP="$SERVER_ONE_IP"
+    ACTIVE_SLAVE_NAME="$SERVER_TWO_NAME"
+    ACTIVE_SLAVE_IP="$SERVER_TWO_IP"
 
-  # Check if the current server matches REPLICATION_IP_SERVER_TWO
-  elif ip -4 addr show to "$REPLICATION_IP_SERVER_TWO" >/dev/null 2>&1; then
+  # Check if the current server matches SERVER_TWO_IP
+  elif ip -4 addr show to "$SERVER_TWO_IP" >/dev/null 2>&1; then
     # Set master and slave details based on SERVER_TWO as master
-    ACTIVE_MASTER_NAME="$SERVER_TWO_HOSTNAME"
-    ACTIVE_MASTER_IP="$REPLICATION_IP_SERVER_TWO"
-    ACTIVE_SLAVE_NAME="$SERVER_ONE_HOSTNAME"
-    ACTIVE_SLAVE_IP="$REPLICATION_IP_SERVER_ONE"
+    ACTIVE_MASTER_NAME="$SERVER_TWO_NAME"
+    ACTIVE_MASTER_IP="$SERVER_TWO_IP"
+    ACTIVE_SLAVE_NAME="$SERVER_ONE_NAME"
+    ACTIVE_SLAVE_IP="$SERVER_ONE_IP"
 
   # Neither IP is configured on this server
   else
-    echo "Error: Neither REPLICATION_IP_SERVER_ONE ($REPLICATION_IP_SERVER_ONE) nor REPLICATION_IP_SERVER_TWO ($REPLICATION_IP_SERVER_TWO) are valid IPs on this server. Exiting..."
+    echo "Error: Neither SERVER_ONE_IP ($SERVER_ONE_IP) nor SERVER_TWO_IP ($SERVER_TWO_IP) are valid IPs on this server. Exiting..."
     exit 1
   fi
   return 0
@@ -559,10 +559,10 @@ Type 'I_Want_To_Destroy' to continue or any other key to exit."
 #   1 on error (user cancelled)
 #
 # Global variables used:
-#   SERVER_ONE_HOSTNAME
-#   REPLICATION_IP_SERVER_ONE
-#   SERVER_TWO_HOSTNAME
-#   REPLICATION_IP_SERVER_TWO
+#   SERVER_ONE_NAME
+#   SERVER_ONE_IP
+#   SERVER_TWO_NAME
+#   SERVER_TWO_IP
 #   REPLICATION_IP_ISCSI
 #   REPLICATION_DEV_NAME
 #   BLOCK_DEVICE
@@ -570,18 +570,18 @@ setup_check_summary() {
   # Display the IP summary and ask the user to confirm
   make_box "Please review theses configurations before proceeding:
 
-Server ONE Replication Name: $SERVER_ONE_HOSTNAME
-Server ONE Replication IP: $REPLICATION_IP_SERVER_ONE
-Server TWO Replication Name: $SERVER_TWO_HOSTNAME
-Server TWO Replication IP: $REPLICATION_IP_SERVER_TWO
+Server ONE Replication Name: $SERVER_ONE_NAME
+Server ONE Replication IP: $SERVER_ONE_IP
+Server TWO Replication Name: $SERVER_TWO_NAME
+Server TWO Replication IP: $SERVER_TWO_IP
 
 $(set_color "green")Active MASTER: $ACTIVE_MASTER_NAME ($ACTIVE_MASTER_IP) $(set_color "normal")
-$(set_color "yellow")Active SLAVE: $ACTIVE_SLAVE_NAME ($ACTIVE_SLAVE_IP) $(set_color "normal")
+$(set_color "green")Active SLAVE: $ACTIVE_SLAVE_NAME ($ACTIVE_SLAVE_IP) $(set_color "normal")
 
 Shared iSCSI IP: $REPLICATION_IP_ISCSI
 
 Replication Interface: $REPLICATION_DEV_NAME
-$(set_color "red")Replication Block Device: $BLOCK_DEVICE $(set_color "normal")"
+$(set_color "yellow")Replication Block Device: $BLOCK_DEVICE $(set_color "normal")"
 
   # Ask the user to confirm
   echo "Press <Enter> to confirm or any other key to cancel."
@@ -1120,8 +1120,8 @@ drbd_calculate_rates() {
 # file is saved to the path specified by $DRBD_CONF_FILE.
 #
 # Prerequisites:
-# - Variables C_MIN_RATE, C_MAX_RATE, SERVER_ONE_HOSTNAME, SERVER_TWO_HOSTNAME,
-#   BLOCK_DEVICE, REPLICATION_IP_SERVER_ONE, REPLICATION_IP_SERVER_TWO, and
+# - Variables C_MIN_RATE, C_MAX_RATE, SERVER_ONE_NAME, SERVER_TWO_NAME,
+#   BLOCK_DEVICE, SERVER_ONE_IP, SERVER_TWO_IP, and
 #   DRBD_CONF_FILE must be set prior to calling this function.
 #
 # Outputs:
@@ -1160,17 +1160,17 @@ common {
 resource iscsi1 {
     protocol C;
 
-    on ${SERVER_ONE_HOSTNAME} {
+    on ${SERVER_ONE_NAME} {
         device /dev/drbd1;
         disk ${BLOCK_DEVICE};
-        address ${REPLICATION_IP_SERVER_ONE}:7789;
+        address ${SERVER_ONE_IP}:7789;
         meta-disk internal;
     }
 
-    on ${SERVER_TWO_HOSTNAME} {
+    on ${SERVER_TWO_NAME} {
         device /dev/drbd1;
         disk ${BLOCK_DEVICE};
-        address ${REPLICATION_IP_SERVER_TWO}:7789;
+        address ${SERVER_TWO_IP}:7789;
         meta-disk internal;
     }
 }
@@ -1188,7 +1188,7 @@ EOF
 #
 # Prerequisites:
 # - Variables REPLICATION_DEV_NAME, BLOCK_DEVICE, POOL_ROLE, and
-#   SERVER_TWO_HOSTNAME must be set prior to calling this function.
+#   SERVER_TWO_NAME must be set prior to calling this function.
 #
 # Outputs:
 # - Writes an ARP update to the replication network interface
