@@ -95,8 +95,7 @@ Check if you have satisfied that the following requirements:
  data will be lost."
 
   # Ask the user to confirm
-  echo "Press <Enter> to confirm or any other key to cancel."
-  read -r confirmation
+  read -p "Press <Enter> to confirm or any other key to cancel." -r confirmation
 
   # If the user presses anything other than Enter, exit
   if [ -n "$confirmation" ]; then
@@ -211,12 +210,14 @@ check_pool_size() {
 #
 ################################################################
 
-###################################
-# Get and validate hostname for Servers ONE and TWO
+# Prompt the user for a hostname, validate it, and assign the value to the
+# specified variable name.
 #
-# This function prompts the user to enter the hostname for both servers
-# validates them according to RFC 1123 and other criteria, and stores them
-# in the SERVER_ONE_NAME and SERVER_TWO_NAME variables.
+# Parameters:
+#   prompt_message - The text to display when prompting the user for a hostname.
+#   default_value  - The default value to assign if the user does not enter a hostname.
+#   hostname_variable_name - The name of the variable to assign the validated hostname to.
+#
 #
 # Returns:
 #   SERVER_ONE_NAME - The validated hostname for the server ONE.
@@ -226,29 +227,40 @@ get_hostname() {
   # Function to get and validate a single hostname
   get_single_hostname() {
     # The message to display to the user
-    local prompt="$1"
-    local hostname_variable_name="$2"
+    local prompt_message="$1"
+    local default_value="$2"
+    local hostname_variable_name="$3"
     local success=false
-    local hostname="" # Variable to store the entered hostname
+    local hostname=""
+    # Hostname regex to validate the input (RFC 1123 compliant)
     local hostname_regex='^([a-zA-Z0-9]([-a-zA-Z0-9]*[a-zA-Z0-9])?\.)*[a-zA-Z0-9]([-a-zA-Z0-9]*[a-zA-Z0-9])?$'
 
-    # Loop until a valid hostname is entered
+    # Loop until a valid hostname is entered or the default value is used
     while [ "$success" = false ]; do
-      make_box "Enter the hostname for the $prompt and press <Enter>
-(!! Must be the configured hostname !!)"
-      # Read the input from the user
-      read -p "$prompt: " -r hostname
+      # Display the prompt with the default value if it's set
+      if [ -n "$default_value" ]; then
+        make_box "$prompt_message
+(leave blank to use the default value of $(set_color "green")$default_value)$(set_color "normal"):"
+      else
+        make_box "$prompt_message"
+      fi
+
+      # Read the input from the user, default to the existing hostname if empty
+      read -r -p "Hostname: " hostname
+
+      # If the user didn't provide a hostname, use the default value
+      hostname="${hostname:-$default_value}"
 
       # Validate the hostname input
       if [ -z "$hostname" ]; then
         # Check if the hostname is empty
-        echo -e "Error: Hostname cannot be empty. Please enter a valid hostname."
+        echo "Error: Hostname cannot be empty. Please enter a valid hostname."
       elif [[ ${#hostname} -gt 253 ]]; then
         # Check if the hostname is too long (RFC 1123 allows a maximum of 253 characters)
-        echo -e "Error: Hostname is too long. It must be 253 characters or fewer."
+        echo "Error: Hostname is too long. It must be 253 characters or fewer."
       elif ! [[ $hostname =~ $hostname_regex ]]; then
         # Check if the hostname matches the RFC 1123 format
-        echo -e "Error: Invalid hostname format. A hostname can only contain alphanumeric characters, dots, and hyphens."
+        echo "Error: Invalid hostname format. A hostname can only contain alphanumeric characters, dots, and hyphens."
       else
         # If all validations pass, the hostname is valid
         success=true
@@ -256,15 +268,15 @@ get_hostname() {
         eval "$hostname_variable_name=\$hostname"
       fi
 
-      # If there is a error, pause for 2 seconds.
+      # If there is an error, pause for 2 seconds.
       $success || sleep 2
     done
   }
 
-  # Get hostname for Master server
-  get_single_hostname "Server ONE" SERVER_ONE_NAME
-  # Get hostname for Slave server
-  get_single_hostname "Server TWO" SERVER_TWO_NAME
+  # Get hostname for Master server (uses default if exists)
+  get_single_hostname "Enter the hostname for Server ONE" "$SERVER_ONE_NAME" SERVER_ONE_NAME
+  # Get hostname for Slave server (uses default if exists)
+  get_single_hostname "Enter the hostname for Server TWO" "$SERVER_TWO_NAME" SERVER_TWO_NAME
 }
 
 # Prompt the user for an IP address, validate it, and assign the value to the
@@ -297,36 +309,36 @@ get_ip_address() {
           eval "$ip_variable_name"=\$ip_override
         else
           echo "Invalid IP Address Specified!"
-          sleep 1
         fi
       else
         if [ -z "$default_value" ]; then
           echo "No IP address entered and no default value provided. Please enter a valid IP address."
-          sleep 1
         else
           success=true
           eval "$ip_variable_name"=\$default_value
         fi
       fi
-      sleep 1
+      # If there is a error, pause for 2 seconds.
+      $success || sleep 2
     done
   }
 
   # Get Replication IP for MASTER host
-  get_single_ip "Enter the Replication IP address for the Server ONE host and press <Enter>
-(leave blank to use the default value of $SERVER_ONE_IP)" "$SERVER_ONE_IP" SERVER_ONE_IP
+  get_single_ip "Enter the Replication IP address for the Server ONE.
+(leave blank to use the default value of $(set_color "green")$SERVER_ONE_IP)$(set_color "normal")" "$SERVER_ONE_IP" SERVER_ONE_IP
 
   # Get Replication IP for SLAVE host
-  get_single_ip "Enter the Replication IP address for the Server TWO host and press <Enter>
-(leave blank to use the default value of $SERVER_TWO_IP)" "$SERVER_TWO_IP" SERVER_TWO_IP
+  get_single_ip "Enter the Replication IP address for the Server TWO.
+(leave blank to use the default value of $(set_color "green")$SERVER_TWO_IP)$(set_color "normal")" "$SERVER_TWO_IP" SERVER_TWO_IP
 
   # Get Floating IP for iSCSI storage
-  get_single_ip "Enter the Shared/Floating IP address for iSCSI storage and press <Enter>
-(leave blank to use the default value of $REPLICATION_IP_ISCSI)" "$REPLICATION_IP_ISCSI" REPLICATION_IP_ISCSI
+  get_single_ip "Enter the Shared/Floating IP address for iSCSI storage.
+(leave blank to use the default value of $(set_color "green")$REPLICATION_IP_ISCSI)$(set_color "normal")" "$REPLICATION_IP_ISCSI" REPLICATION_IP_ISCSI
 
   # Get Heuristic IP for HA-Lizard
-  get_single_ip "Enter the Heuristic IP address used by HA-Lizard and press <Enter>
-This IP should be reachable by this host over XenServer management network" "" HEURISTIC_IP
+  get_single_ip "Enter the Heuristic IP address used by HA-Lizard.
+This IP should be reachable by this host over XenServer management network.${HEURISTIC_IP:+
+(leave blank to use the default value of $(set_color "green")$HEURISTIC_IP)$(set_color "normal")}" "${HEURISTIC_IP:-}" HEURISTIC_IP
 }
 
 #######################################
@@ -584,8 +596,7 @@ Replication Interface: $REPLICATION_DEV_NAME
 $(set_color "yellow")Replication Block Device: $BLOCK_DEVICE $(set_color "normal")"
 
   # Ask the user to confirm
-  echo "Press <Enter> to confirm or any other key to cancel."
-  read -r confirmation
+  read -p "Press <Enter> to confirm or any other key to cancel." -r confirmation
 
   # If the user presses Enter (blank input), proceed
   if [ -z "$confirmation" ]; then
@@ -658,8 +669,7 @@ remove_local_storage() {
   echo "Local Storage SR UUID discovered = $this_host_local_storage"
   echo "Local Storage PBD UUID discovered = $this_host_local_storage_pbd"
   echo
-  echo "Press <Enter> to confirm or any other key to cancel."
-  read -r confirmation
+  read -p "Press <Enter> to confirm or any other key to cancel." -r confirmation
 
   # If the user presses Enter (blank input), proceed
   if [ -z "$confirmation" ]; then
@@ -1344,6 +1354,43 @@ sync_config_files() {
   return 0
 }
 
+update_iscsi_user_config() {
+  echo "Updating USER configuration file ($LOCAL_CONFIG_FILE)..."
+
+  # List of global variable names
+  config_vars=(
+    "BLOCK_DEVICE"
+    "C_MIN_RATE_SCALE_FACTOR"
+    "DISK_SPEED"
+    "HEURISTIC_IP"
+    "LINK_SPEED_BYTES"
+    "REPLICATION_DEV_NAME"
+    "REPLICATION_IP_ISCSI"
+    "REPLICATION_SUBNET"
+    "SERVER_ONE_IP"
+    "SERVER_ONE_NAME"
+    "SERVER_TWO_IP"
+    "SERVER_TWO_NAME"
+  )
+
+  # Iterate over the array and process each variable
+  for var_name in "${config_vars[@]}"; do
+    # Retrieve the value of the variable dynamically
+    param_value="${!var_name}"
+
+    # Check if the variable is set before attempting to access it
+    if [ "$param_value" ]; then
+      # Call the function to update the local configuration file
+      if update_local_conf "$LOCAL_CONFIG_FILE" "$var_name" "$param_value"; then
+        echo "Updated: $var_name=$param_value"
+      else
+        echo "Failed to update $var_name in $LOCAL_CONFIG_FILE"
+      fi
+
+    fi
+  done
+}
+
 # Parse command-line arguments and check if getopt failed
 if ! FLAG_TEMP=$(getopt -o "i,ns,r,s" --long "destroy-existing-data,dry-run,ignore-host-check,no-slave,rollback,sync" -n "iscsi-cfg-setup" -- "$@"); then
   exit 1
@@ -1419,6 +1466,8 @@ else
   get_hostname
   # Get IP address of the server ONE and TWO
   get_ip_address
+  # Update all user inputs to the local configuration file
+  update_iscsi_user_config
   # Check which server is master and slave
   check_active_master_slave
   # If the '--ignore-host-check' flag is not set, proceed with host reachability checks
