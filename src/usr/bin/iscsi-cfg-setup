@@ -878,9 +878,10 @@ firewall_update() {
   echo "Adding firewall rules to allow traffic between hosts on the replication subnet."
 
   # Check if the REPLICATION_SUBNET is defined and not empty
+  # TODO: use values from user local conf
   if [ -z "$REPLICATION_SUBNET" ]; then
     echo "Error: REPLICATION_SUBNET is not set."
-    return 1
+    exit 1
   fi
 
   # File to back up before saving iptables rules
@@ -907,13 +908,13 @@ firewall_update() {
   # Save the iptables rules to ensure persistence across reboots
   if ! service iptables save; then
     echo "Error: Failed to save iptables rules."
-    return 1
+    exit 1
   fi
 
   # Restart the iptables service to apply the new rules
   if ! service iptables restart; then
     echo "Error: Failed to restart iptables service."
-    return 1
+    exit 1
   fi
 
   # Confirm successful update of firewall rules
@@ -999,14 +1000,15 @@ lvm_update_filter() {
 # adjustments, which depend on the hardware's capabilities.
 #####################################
 
-# Default scaling factor for c-min-rate
-C_MIN_RATE_SCALE_FACTOR=3
+# Use the value of C_MIN_RATE_SCALE_FACTOR if it's set, otherwise use 3 as the default
+C_MIN_RATE_SCALE_FACTOR="${C_MIN_RATE_SCALE_FACTOR:-3}"
 
 # Prompt the user to select the replication link speed.
 #
 # This function displays a list of predefined replication link speeds
 # (ranging from 100Mbps to 40Gbps) and asks the user to select a speed
-# by entering the corresponding number. The selected speed is stored in
+# by entering the corresponding number. If LINK_SPEED_BYTES is set on user
+# local config, add it as the first option. The selected speed is stored in
 # the variable $link_speed and its byte equivalent is stored in
 # $LINK_SPEED_BYTES.
 drbd_get_link_speed() {
@@ -1022,18 +1024,37 @@ drbd_get_link_speed() {
     40000000000 # 40Gbps
   )
 
+  # If LINK_SPEED_BYTES is set on user local config, add it as the first option
+  if [ -n "$LINK_SPEED_BYTES" ]; then
+    link_speed_list=("$LINK_SPEED_BYTES" "${link_speed_list[@]}")
+  fi
+
   clear
   while :; do
-    echo "Select replication link speed"
+    echo "Select replication link speed (in Mbps):"
+    echo "Note: The options are listed in Mbps (megabits per second)."
+
+    # Display the list of options
     for i in "${!link_speed_list[@]}"; do
-      echo "[$((i + 1))]  $((link_speed_list[i] / 1000000))Mbps"
+      if [ "$i" -eq 0 ] && [ -n "$LINK_SPEED_BYTES" ]; then
+        # Apply color and custom text to the current user's link speed
+        echo "[$((i + 1))]  $(set_color "green")$((link_speed_list[i] / 1000000)) Mbps (current used speed)$(set_color "normal")"
+      else
+        # Display numeric speeds as Mbps (no text formatting for other options)
+        echo "[$((i + 1))]  $((link_speed_list[i] / 1000000)) Mbps"
+      fi
     done
+
     read -r -p "Enter choice (1-${#link_speed_list[@]}): " link_speed_index
+
     if [[ "$link_speed_index" -ge 1 && "$link_speed_index" -le ${#link_speed_list[@]} ]]; then
+      # Use the selected speed from the list
       link_speed=${link_speed_list[$((link_speed_index - 1))]}
+      # If the user selected a speed from the list, convert to LINK_SPEED_BYTES
       LINK_SPEED_BYTES=$((link_speed / 8))
       break
     else
+      clear
       echo "Invalid selection [$link_speed_index]. Please choose between 1 and ${#link_speed_list[@]}."
     fi
   done
@@ -1046,32 +1067,57 @@ drbd_get_link_speed() {
 # speed by entering the corresponding number. The selected speed is stored in
 # the variable $DISK_SPEED.
 drbd_get_disk_throughput() {
+  # Predefined disk throughput options in bytes per second (Bps)
   declare -a disk_speed_list=(
-    100000000  # 100MiB/s
-    150000000  # 150MiB/s
-    200000000  # 200MiB/s
-    250000000  # 250MiB/s
-    300000000  # 300MiB/s
-    400000000  # 400MiB/s
-    500000000  # 500MiB/s
-    600000000  # 600MiB/s
-    700000000  # 700MiB/s
-    800000000  # 800MiB/s
-    900000000  # 900MiB/s
-    1000000000 # 1000MiB/s or greater
+    104857600  # 100MiB/s
+    157286400  # 150MiB/s
+    209715200  # 200MiB/s
+    262144000  # 250MiB/s
+    314572800  # 300MiB/s
+    419430400  # 400MiB/s
+    524288000  # 500MiB/s
+    629145600  # 600MiB/s
+    734003200  # 700MiB/s
+    838860800  # 800MiB/s
+    943718400  # 900MiB/s
+    1048576000 # 1000MiB/s or greater
   )
+
+  # If DISK_SPEED is set on user local config, add it as the first option
+  if [ -n "$DISK_SPEED" ]; then
+    disk_speed_list=("$DISK_SPEED" "${disk_speed_list[@]}")
+  fi
 
   clear
   while :; do
-    echo "Select disk throughput speed"
+    echo "Select disk throughput speed (in MiB/s):"
+    echo "Note: The options are listed in MiB/s (mebibytes per second)."
+
+    # Display the list of options
     for i in "${!disk_speed_list[@]}"; do
-      echo "[$((i + 1))]  $((disk_speed_list[i] / 1000000))MiB/s"
+      if [ "$i" -eq 0 ] && [ -n "$DISK_SPEED" ]; then
+        # Apply color and custom text to the current user's disk speed
+        echo "[$((i + 1))]  $(set_color "green")$((disk_speed_list[i] / 1048576)) MiB/s (current used speed)$(set_color "normal")"
+      else
+        # Display numeric speeds as MiB/s (no text formatting for other options)
+        echo "[$((i + 1))]  $((disk_speed_list[i] / 1048576)) MiB/s"
+      fi
     done
+
     read -r -p "Enter choice (1-${#disk_speed_list[@]}): " disk_speed_index
+
     if [[ "$disk_speed_index" -ge 1 && "$disk_speed_index" -le ${#disk_speed_list[@]} ]]; then
-      DISK_SPEED=${disk_speed_list[$((disk_speed_index - 1))]}
+      # Use the selected speed from the list
+      selected_speed=${disk_speed_list[$((disk_speed_index - 1))]}
+
+      # If the selected option is a numeric speed value, update DISK_SPEED
+      if [[ "$selected_speed" =~ ^[0-9]+$ ]]; then
+        DISK_SPEED=$selected_speed
+        echo "Selected disk throughput: $((DISK_SPEED / 1048576)) MiB/s"
+      fi
       break
     else
+      clear
       echo "Invalid selection [$disk_speed_index]. Please choose between 1 and ${#disk_speed_list[@]}."
     fi
   done
@@ -1092,13 +1138,18 @@ drbd_calculate_rates() {
     exit 1
   fi
 
+  # Convert link speed from bps to Bps (bytes per second)
+  LINK_SPEED_BPS=$((LINK_SPEED_BYTES * 8)) # Convert from Bps to bps
+
   # Determine c-max-rate based on the limiting factor
-  if [[ $DISK_SPEED -gt $LINK_SPEED_BYTES ]]; then
+  if [[ $DISK_SPEED -gt $LINK_SPEED_BPS ]]; then
     echo "Link speed [${LINK_SPEED_BYTES}Bps] is less than disk throughput [${DISK_SPEED}Bps]"
-    C_MAX_RATE=$((LINK_SPEED_BYTES / 1000000)) # Convert to MiB/s
+    # Convert link speed from Bps to MiB/s
+    C_MAX_RATE=$((LINK_SPEED_BYTES / 1048576)) # Convert to MiB/s
   else
     echo "Disk throughput [${DISK_SPEED}Bps] is less than link speed [${LINK_SPEED_BYTES}Bps]"
-    C_MAX_RATE=$((DISK_SPEED / 1000000)) # Convert to MiB/s
+    # Convert disk speed from Bps to MiB/s
+    C_MAX_RATE=$((DISK_SPEED / 1048576)) # Convert to MiB/s
   fi
 
   # Allow user to modify c-min-rate scaling factor
@@ -1113,11 +1164,11 @@ drbd_calculate_rates() {
     exit 1
   fi
 
-  echo "c-max-rate has been set to [${C_MAX_RATE}MiB/s]"
+  echo "c-max-rate has been set to [${C_MAX_RATE} MiB/s]"
 
   # Calculate c-min-rate dynamically based on the scaling factor
   C_MIN_RATE=$((C_MAX_RATE / C_MIN_RATE_SCALE_FACTOR))
-  echo "c-min-rate has been set to [${C_MIN_RATE}MiB/s]"
+  echo "c-min-rate has been set to [${C_MIN_RATE} MiB/s]"
 }
 
 # Generates the DRBD configuration file
@@ -1185,7 +1236,15 @@ resource iscsi1 {
     }
 }
 EOF
-  echo "DRBD configuration file has been generated at $DRBD_CONF_FILE"
+
+  # Check if the DRBD configuration file was generated successfully
+  if drbdadm --dry-run dump; then
+    echo "DRBD configuration file has been generated at $DRBD_CONF_FILE"
+  else
+    echo "Error: Failed to generate DRBD configuration file at $DRBD_CONF_FILE. Exiting..."
+    exit 1
+  fi
+
 }
 
 ######################################
@@ -1380,6 +1439,10 @@ update_iscsi_user_config() {
 
     # Check if the variable is set before attempting to access it
     if [ "$param_value" ]; then
+      # Special case for LINK_SPEED_BYTES to convert to Mbps
+      if [ "$var_name" = "LINK_SPEED_BYTES" ]; then
+        param_value=$((param_value * 8))
+      fi
       # Call the function to update the local configuration file
       if update_local_conf "$LOCAL_CONFIG_FILE" "$var_name" "$param_value"; then
         echo "Updated: $var_name=$param_value"
