@@ -48,6 +48,7 @@
     "KILLALL",
     "libexec",
     "Mbps",
+    "mebibytes",
     "noninteractive",
     "partprobe",
     "pgrep",
