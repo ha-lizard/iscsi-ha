@@ -40,9 +40,12 @@
     "gnupg",
     "iscsi",
     "killproc",
+    "lvmoiscsi",
     "noninteractive",
     "pgrep",
     "pipefail",
+    "replug",
+    "replugging",
     "RETVAL",
     "rpmbuild",
     "rpmmacros",
@@ -51,7 +54,8 @@
     "SRPM",
     "SRPMS",
     "strftime",
-    "tagname"
+    "tagname",
+    "uuid"
   ],
   "ansible.python.interpreterPath": "/bin/python3"
 }

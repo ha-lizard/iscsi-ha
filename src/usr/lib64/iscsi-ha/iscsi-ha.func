@@ -416,7 +416,7 @@ function auto_plug_pbd() {
   # SRs. XE returns comma separated
   # list of SR UUIDs
   ##################################
-  SR_LIST=$($XE sr-list type=lvmoiscsi --minimal)
+  mapfile -t SR_LIST < <($XE sr-list type=lvmoiscsi --minimal | tr "," "\n")
   if [[ -n ${SR_LIST} ]]; then
     log "$FUNCNAME: Found LVMoISCSI SR List: $SR_LIST"
     RESTORE_IFS=$IFS
@@ -426,7 +426,7 @@ function auto_plug_pbd() {
       # Get list of PBDs to check for SR
       # on this iteration
       #####################################
-      PBD=$($XE pbd-list sr-uuid="$SR_UUID" currently-attached=false --minimal)
+      mapfile -t PBD < <($XE pbd-list sr-uuid="$SR_UUID" currently-attached=false --minimal | tr "," "\n")
 
       ######################################
       # Plug PBD if not attached
