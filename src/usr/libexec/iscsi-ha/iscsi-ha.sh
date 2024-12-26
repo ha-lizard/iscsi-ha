@@ -222,7 +222,7 @@ if [ "$STATE" = "master" ] || [ "$SET_ARG1" = "become_primary" ] && [ "$SET_ARG1
   ######################################
   IFS=":"
   for resource in "${DRBD_RESOURCES[@]}"; do
-    if check_drbd_resource_state "$resource" Primary; then
+    if ! check_drbd_resource_state "$resource" Primary; then
       if drbdadm primary "$resource"; then
         log "DRBD Resource: [$resource] successfully transitioned to Primary"
         email "DRBD Resource: [$resource] successfully transitioned to Primary" "4"

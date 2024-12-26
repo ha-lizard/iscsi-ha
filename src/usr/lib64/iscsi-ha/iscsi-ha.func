@@ -159,13 +159,12 @@ function email() {
     # due to bad config file, etc...
     ###############################################
     if [ ${#MAIL_SPOOL} -gt 1 ] && [ -d "$MAIL_SPOOL" ]; then
-      FLUSH_MAIL_EXEC="find $MAIL_SPOOL/ -name *.msg -type f -mmin +$MAIL_SCREEN_TIME -delete"
-      log "Ready to exec [${FLUSH_MAIL_EXEC}]"
-      ${FLUSH_MAIL_EXEC}
-      RETVAL=$?
-      log "FLUSH_MAIL_EXEC returned [$RETVAL]"
-      #find $MAIL_SPOOL/ -name *.msg -type f -mmin +$MAIL_SCREEN_TIME -delete
-      #log "MAIL_SPOOL=[$MAIL_SPOOL]  MAIL_SCREEN_TIME=[$MAIL_SCREEN_TIME]"
+      log "Ready to exec cleanup old mail queue"
+      if find "$MAIL_SPOOL"/ -name "*.msg" -type f -mmin +"$MAIL_SCREEN_TIME" -delete; then
+        log "Successfully cleaned up old mail queue"
+      else
+        log "Failed to clean up old mail queue"
+      fi
     fi
 
     ##############################################
