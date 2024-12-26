@@ -4,7 +4,7 @@
 
 # shellcheck source=/dev/null
 # Source the configuration file for iscsi-ha
-source /etc/iscsi-ha/iscsi-ha.load
+source /etc/iscsi-ha/iscsi-ha.init
 
 # Initialize retry counter
 RETRY=1

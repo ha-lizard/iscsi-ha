@@ -23,7 +23,7 @@
 #                                                                               #
 #################################################################################
 
-source /etc/iscsi-ha/iscsi-ha.func
+source /usr/lib64/iscsi-ha/iscsi-ha.func
 
 alert_body="DRBD split-brain detected from host $(hostname). \
 This is not a cluster split-brain condition and is limited only \

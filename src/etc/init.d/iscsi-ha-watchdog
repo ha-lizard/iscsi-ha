@@ -15,7 +15,7 @@ PROCESS_NAME="iscsi-ha"
 PROC_NAME="${PROCESS_NAME}-watchdog"
 PID_FILE="/var/run/${PROC_NAME}.pid"
 LOCK_FILE="/var/lock/subsys/${PROC_NAME}"
-GLOBAL_CONF="/etc/iscsi-ha/iscsi-ha.load"
+GLOBAL_CONF="/etc/iscsi-ha/iscsi-ha.init"
 OVERRIDE_CONF="/etc/iscsi-ha/iscsi-ha.conf"
 LIB_FUNCTIONS="/usr/lib64/iscsi-ha/iscsi-ha.func"
 

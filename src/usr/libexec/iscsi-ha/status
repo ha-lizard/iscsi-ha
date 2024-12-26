@@ -23,8 +23,8 @@
 #                                                                               #
 #################################################################################
 source /etc/iscsi-ha/iscsi-ha.conf
-source /etc/iscsi-ha/iscsi-ha.load
-source /etc/iscsi-ha/iscsi-ha.func
+source /etc/iscsi-ha/iscsi-ha.init
+source /usr/lib64/iscsi-ha/iscsi-ha.func
 
 ISCSI_TARGET_SERVICE=$(basename "$ISCSI_TARGET_SERVICE")
 
