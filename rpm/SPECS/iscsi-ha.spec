@@ -86,6 +86,7 @@ install -D -m 644 LICENSE %{buildroot}%{docdir}/
 install -D -m 644 CHANGELOG.md %{buildroot}%{docdir}/
 install -D -m 644 usr/share/doc/iscsi-ha/INSTALL %{buildroot}%{docdir}/
 install -D -m 644 usr/share/man/man8/iscsi-cfg.8 %{buildroot}%{_mandir}/man8/iscsi-cfg.8
+install -D -m 644 usr/share/man/man8/iscsi-cfg-setup.8 %{buildroot}%{_mandir}/man8/iscsi-cfg-setup.8
 # TODO: legacy scripts
 install -D -m 755 usr/libexec/iscsi-ha/scripts/* %{buildroot}%{_libexecdir}/iscsi-ha/scripts/
 
@@ -174,6 +175,7 @@ fi
 %doc %{docdir}/INSTALL
 %doc %{docdir}/CHANGELOG.md
 %{_mandir}/man8/iscsi-cfg.8.gz
+%{_mandir}/man8/iscsi-cfg-setup.8.gz
 
 # Create /var/lib/iscsi/state directory
 %dir %{_localstatedir}/lib/iscsi-ha/state

@@ -1508,7 +1508,7 @@ update_iscsi_user_config() {
 }
 
 # Parse command-line arguments and check if getopt failed
-if ! FLAG_TEMP=$(getopt -o "i,ns,r,s" --long "destroy-existing-data,dry-run,ignore-host-check,no-slave,rollback,sync" -n "iscsi-cfg-setup" -- "$@"); then
+if ! FLAG_TEMP=$(getopt -o "h,i,ns,r,s" --long "destroy-existing-data,dry-run,help,ignore-host-check,no-slave,rollback,sync" -n "iscsi-cfg-setup" -- "$@"); then
   exit 1
 fi
 # Apply the parsed arguments
@@ -1524,6 +1524,11 @@ while true; do
   --dry-run)
     FLAG_DRY_RUN=1
     shift
+    ;;
+  -h | --help)
+    # Display the man page for the script
+    man "$(basename "$0")"
+    exit 0
     ;;
   -i | --ignore-host-check)
     FLAG_IGNORE_HOST_CHECK=1
