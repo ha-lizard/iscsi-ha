@@ -1375,14 +1375,25 @@ You can rerun the script or revert the changes using the --rollback flag.
   fi
 
   # Perform synchronization if the current state is "master"
-  # TODO: this will take a while to complete. maybe put it on background or
   # show the users the status of the sync ?
   if [ "$POOL_ROLE" = "master" ]; then
-    echo "Synchronizing storage with peer/slave host"
-    if ! drbdadm -- --overwrite-data-of-peer primary iscsi1; then
-      echo "Error: Failed to synchronize storage as primary" >&2
+    echo "Synchronizing storage with peer/slave host..."
+
+    # Attempt to start the synchronization process in the background
+    drbdadm -- --overwrite-data-of-peer primary iscsi1 >/dev/null 2>&1 &
+    local drbd_pid=$!
+
+    # Allow a moment for the process to fail if there are immediate issues
+    sleep 5
+
+    # Check if the process is still running
+    if ! kill -0 "$drbd_pid" >/dev/null 2>&1; then
+      echo "Error: Failed to start DRBD overwrite-data-of-peer synchronization. Check the kernel logs for more information."
       return 1
     fi
+
+    echo "DRBD synchronization started successfully in the background (PID: $drbd_pid)."
+    echo "You can monitor the sync status using the 'cat /proc/drbd' or 'drbdadm status' commands."
   fi
 
   echo "DRBD initialization completed successfully"
