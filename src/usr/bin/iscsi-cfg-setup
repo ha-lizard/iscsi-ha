@@ -1293,7 +1293,6 @@ Installation will resume after the DRBD peers connect."
   sleep 1
 
   # Check for existing DRBD metadata on the block device
-  # TODO: check the output of drbdadm dump-md
   if drbdadm dump-md all 2>&1 | grep -q "$BLOCK_DEVICE" && [ "$FLAG_DESTROY_EXISTING_DATA" -eq 0 ]; then
     # Warn the user about existing metadata and provide choices
     while true; do
@@ -1418,12 +1417,42 @@ sync_config_files() {
 
   # Attempt to sync the files with the remote server
   if ! sync_files "$ACTIVE_SLAVE_IP" "${LVM_CONF[@]}" "$DRBD_CONF_FILE" "$IPTABLES_RULES_FILE"; then
-    echo "Error: You can try running the sync again using the --sync flag."
+    echo "Error: You can try running it again using the --sync flag."
     return 1
   fi
 
   # Successful synchronization
   return 0
+}
+
+# Restarts the HA-Lizard services on the remote server specified by
+# ACTIVE_SLAVE_NAME and ACTIVE_SLAVE_IP.
+#
+# Parameters:
+#   ACTIVE_SLAVE_NAME - The name of the active slave server.
+#   ACTIVE_SLAVE_IP - The IP address of the active slave server.
+#
+# Returns:
+#   0 on success, 1 on failure.
+restart_remote_services() {
+  # Validate input variables
+  if [[ -z "$ACTIVE_SLAVE_NAME" || -z "$ACTIVE_SLAVE_IP" ]]; then
+    echo "Error: Missing ACTIVE_SLAVE_NAME or ACTIVE_SLAVE_IP."
+    return 1
+  fi
+
+  # Inform the user of the start of the synchronization process
+  echo "Restarting services on server $ACTIVE_SLAVE_NAME ($ACTIVE_SLAVE_IP)..."
+
+  # Restart the HA-Lizard services on the remote server
+  if ! service_execute_remote "$ACTIVE_SLAVE_IP" restart ha-lizard iscsi-ha; then
+    echo "Error: You can try running it again using the --sync flag."
+    return 1
+  fi
+
+  # Successful synchronization
+  return 0
+
 }
 
 update_iscsi_user_config() {
@@ -1519,8 +1548,10 @@ if [ "$FLAG_ROLLBACK" = "1" ]; then
   # Restore local storage
   restore_local_storage
 elif [ "$FLAG_SYNC" = "1" ]; then
-  # If sync is enabled, set up sync procedure only
-  setup_sync
+  # Send new configuration files to the slave server
+  sync_config_files
+  # Restart services on the slave server
+  restart_remote_services
 else
   # Step 1: Pre-configuration checks
   # These checks ensure the system is ready for further steps.
@@ -1588,7 +1619,8 @@ else
   ha-cfg set-quiet FENCE_HEURISTICS_IPS "$HEURISTIC_IP"
   # Send new configuration files to the slave server
   sync_config_files
-  # TODO: restart services on the slave server
+  # Restart services on the slave server
+  restart_remote_services
   # Initialize DRBD devices and settings
   drbd_initialize
 
