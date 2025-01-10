@@ -1,0 +1,1650 @@
+#!/bin/bash
+# shellcheck source=/dev/null
+##################################################
+# HA-Lizard noSAN Installer version __VERSION__
+##################################################
+#################################################################################################
+#
+# HA-Lizard - Open Source High Availability Framework for Xen Cloud Platform and XenServer
+#
+# Copyright 2018 Salvatore Costantino
+# ha@pulsesupply.com
+#
+# This file is part of HA-Lizard.
+#
+#    HA-Lizard is free software: you can redistribute it and/or modify
+#    it under the terms of the GNU General Public License as published by
+#    the Free Software Foundation, either version 3 of the License, or
+#    (at your option) any later version.
+#
+#    HA-Lizard is distributed in the hope that it will be useful,
+#    but WITHOUT ANY WARRANTY; without even the implied warranty of
+#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#    GNU General Public License for more details.
+#
+#    You should have received a copy of the GNU General Public License
+#    along with HA-Lizard.  If not, see <http://www.gnu.org/licenses/>.
+#
+##################################################################################################
+# Initialize variables
+FLAG_DESTROY_EXISTING_DATA=0
+FLAG_DRY_RUN=0
+FLAG_IGNORE_HOST_CHECK=0
+FLAG_NO_SLAVE=0
+FLAG_ROLLBACK=0
+FLAG_SYNC=0
+
+# Load required configuration and functions
+source /usr/lib64/iscsi-ha/iscsi-ha.func
+source /usr/lib64/ha-cfg/common_functions.sh
+source /etc/iscsi-ha/iscsi-ha.conf
+# Define the path to the user local override configuration file
+LOCAL_CONFIG_FILE="/etc/iscsi-ha/iscsi-ha_local.conf"
+
+# Check if the local configuration file exists
+if [[ -f "$LOCAL_CONFIG_FILE" ]]; then
+  # Load the local configuration file
+  source "$LOCAL_CONFIG_FILE"
+  echo "Successfully loaded local configuration from '$LOCAL_CONFIG_FILE'."
+fi
+
+################################################################
+#
+# Block for functions that handle checks and validations
+# Ensures prerequisites and conditions are met before execution
+#
+################################################################
+
+# Display the welcome message and legal information to the user. This message
+# includes the GNU Public License version 3 terms and a list of requirements
+# that must be satisfied before proceeding with the installation.
+#
+# The user is asked to confirm that they have satisfied the requirements.
+# If they press anything other than Enter, the script will exit.
+check_welcome() {
+  make_box "ha-lizard noSAN Automated Installer for XenServer/XCP-ng
+Copyright 2021 Salvatore Costantino
+ha@pulsesupply.com
+
+ha-lizard is free software: you can redistribute it and/or modify it under
+the terms of the GNU General Public License as published by the Free
+Software Foundation, either version 3 of the License, or (at your option)
+any later version.
+
+ha-lizard is distributed in the hope that it will be useful, but WITHOUT
+ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for
+more details.
+
+You should have received a copy of the GNU General Public License along
+with ha-lizard. If not, see <http://www.gnu.org/licenses/>.
+
+###########################################################################
+################# IMPORTANT - READ BELOW BEFORE PROCEEDING ################
+###########################################################################
+
+Check if you have satisfied that the following requirements:
+- This installer requires a 2-node XenServer pool. A master and a slave.
+- Each host shall have a unique hostname set (localhost is not valid).
+- A replication interface and associated IP address should be configured for
+  each host before proceeding.
+- If you are not converting the default local storage into iSCSI-HA storage,
+  then you should know the block device name to be used for storage before
+  proceeding (e.g., /dev/sdb).
+- If you are converting the default local storage to iSCSI-HA storage, ALL
+ data will be lost."
+
+  # Ask the user to confirm
+  read -p "Press <Enter> to confirm or any other key to cancel." -r confirmation
+
+  # If the user presses anything other than Enter, exit
+  if [ -n "$confirmation" ]; then
+    echo "Configuration cancelled. Exiting..."
+    exit 1
+  fi
+}
+
+# Check for required command dependencies
+#
+# This function checks for a list of required command.
+# If any of the commands are not available, the function will exit.
+check_required_commands() {
+  # Check for required command dependencies
+  required_commands=(awk grep ip uuidgen basename wget readlink xe tar iptables yum dd echo cat service systemctl hostname curl rpm partprobe)
+  clear
+  echo "Checking for required dependencies..."
+  # Iterate over each required command
+  for cmd in "${required_commands[@]}"; do
+    # Check if the command is available
+    if ! command -v "$cmd" >/dev/null; then
+      # Print message if command is missing and exit with error
+      echo "!! Missing Dependency: $cmd"
+      exit 1
+    else
+      # Print message if command is found
+      echo "$cmd found OK.."
+    fi
+  done
+  sleep 1
+}
+
+#######################################
+# Function to check if the host is Master or Slave
+# Reads the pool configuration and determines the host's role.
+# Exits the script if the host is not the pool Master.
+#
+# Returns:
+#   0 if the host is the Master
+#   1 if there is an error (e.g., pool.conf is missing or improperly configured)
+#######################################
+check_host_role_in_pool() {
+  # Define the path to the pool configuration file
+  local pool_conf_file="/etc/xensource/pool.conf"
+
+  # Check if the pool configuration file exists
+  if [ -e "$pool_conf_file" ]; then
+    # Read the pool status (Master or Slave)
+    POOL_ROLE=$(cat "$pool_conf_file")
+
+    # Check if the POOL_ROLE is "master"
+    if [[ "$POOL_ROLE" != "master" ]]; then
+      echo "This setup should only be run on the pool master server."
+      echo "Current role: $POOL_ROLE. Exiting..."
+      exit 1
+    fi
+
+    # Output the host's role in the pool
+    echo "This host is the pool master. Proceeding..."
+    return 0
+  else
+    # If the pool configuration file is missing, show an error message
+    echo "$pool_conf_file is missing. Cannot determine if the host is Master or Slave."
+    echo "Ensure that the pool is properly configured with exactly two hosts before continuing. Exiting..."
+    exit 1
+  fi
+}
+
+######################################
+# Function to validate the number of hosts in the pool
+# Checks if the pool contains exactly 2 hosts and whether the "--no-slave" flag is provided.
+#
+# Args passed in:
+#   None
+#
+# Returns:
+#   0 on success (if validation passes or if "--no-slave" is set)
+#   1 on error (if validation fails)
+#
+# Global variables used:
+#   FLAG_NO_SLAVE (global flag)
+######################################
+check_pool_size() {
+  # Get the list of hosts in the pool
+  local pool_hosts
+  pool_hosts=$(xe host-list --minimal)
+
+  # Check if the '--no-slave' flag is provided
+  if [ "$FLAG_NO_SLAVE" = "1" ]; then
+    echo "Flag --no-slave is set. Skipping pool size validation and continuing."
+    return 0
+  fi
+
+  # Validate that there are exactly 2 hosts in the pool
+  local host_count
+  host_count=$(echo "$pool_hosts" | awk -F, '{print NF}')
+
+  if [ "$host_count" -ne 2 ]; then
+    echo "Installer requires a pool with exactly 2 hosts. Found $host_count hosts. Exiting..."
+    exit 1
+  fi
+
+  # If validation passes
+  echo "Pool with exactly 2 hosts validated."
+  return 0
+}
+
+################################################################
+#
+# Block for functions that prompt and process user inputs
+# Collects necessary data interactively from the user
+#
+################################################################
+
+# Prompt the user for a hostname, validate it, and assign the value to the
+# specified variable name.
+#
+# Parameters:
+#   prompt_message - The text to display when prompting the user for a hostname.
+#   default_value  - The default value to assign if the user does not enter a hostname.
+#   hostname_variable_name - The name of the variable to assign the validated hostname to.
+#
+#
+# Returns:
+#   SERVER_ONE_NAME - The validated hostname for the server ONE.
+#   SERVER_TWO_NAME - The validated hostname for the server TWO.
+###################################
+get_hostname() {
+  # Function to get and validate a single hostname
+  get_single_hostname() {
+    # The message to display to the user
+    local prompt_message="$1"
+    local default_value="$2"
+    local hostname_variable_name="$3"
+    local success=false
+    local hostname=""
+    # Hostname regex to validate the input (RFC 1123 compliant)
+    local hostname_regex='^([a-zA-Z0-9]([-a-zA-Z0-9]*[a-zA-Z0-9])?\.)*[a-zA-Z0-9]([-a-zA-Z0-9]*[a-zA-Z0-9])?$'
+
+    # Loop until a valid hostname is entered or the default value is used
+    while [ "$success" = false ]; do
+      # Display the prompt with the default value if it's set
+      if [ -n "$default_value" ]; then
+        make_box "$prompt_message
+(leave blank to use the default value of $(set_color "green")$default_value)$(set_color "normal"):"
+      else
+        make_box "$prompt_message"
+      fi
+
+      # Read the input from the user, default to the existing hostname if empty
+      read -r -p "Hostname: " hostname
+
+      # If the user didn't provide a hostname, use the default value
+      hostname="${hostname:-$default_value}"
+
+      # Validate the hostname input
+      if [ -z "$hostname" ]; then
+        # Check if the hostname is empty
+        echo "Error: Hostname cannot be empty. Please enter a valid hostname."
+      elif [[ ${#hostname} -gt 253 ]]; then
+        # Check if the hostname is too long (RFC 1123 allows a maximum of 253 characters)
+        echo "Error: Hostname is too long. It must be 253 characters or fewer."
+      elif ! [[ $hostname =~ $hostname_regex ]]; then
+        # Check if the hostname matches the RFC 1123 format
+        echo "Error: Invalid hostname format. A hostname can only contain alphanumeric characters, dots, and hyphens."
+      else
+        # If all validations pass, the hostname is valid
+        success=true
+        # Set the value of the variable dynamically
+        eval "$hostname_variable_name=\$hostname"
+      fi
+
+      # If there is an error, pause for 2 seconds.
+      $success || sleep 2
+    done
+  }
+
+  # Get hostname for Master server (uses default if exists)
+  get_single_hostname "Enter the hostname for Server ONE" "$SERVER_ONE_NAME" SERVER_ONE_NAME
+  # Get hostname for Slave server (uses default if exists)
+  get_single_hostname "Enter the hostname for Server TWO" "$SERVER_TWO_NAME" SERVER_TWO_NAME
+}
+
+# Prompt the user for an IP address, validate it, and assign the value to the
+# specified variable name.
+#
+# Parameters:
+#   prompt_message - The text to display when prompting the user for an IP address.
+#   default_value  - The default value to assign if the user does not enter an IP address.
+#   ip_variable_name - The name of the variable to assign the validated IP address to.
+#
+# Returns:
+#   None
+get_ip_address() {
+  # Function to get and validate a single IP address
+  get_single_ip() {
+    local prompt_message="$1"
+    local default_value="$2"
+    local ip_variable_name="$3"
+    local success=false
+    local ip_override
+
+    # Loop until a valid IP is entered or the default value is used
+    while [ "$success" = false ]; do
+      make_box "$prompt_message"
+      read -r -p "IP address: " ip_override
+
+      if [ "$ip_override" ]; then
+        if is_valid_ipv4 "$ip_override"; then
+          success=true
+          eval "$ip_variable_name"=\$ip_override
+        else
+          echo "Invalid IP Address Specified!"
+        fi
+      else
+        if [ -z "$default_value" ]; then
+          echo "No IP address entered and no default value provided. Please enter a valid IP address."
+        else
+          success=true
+          eval "$ip_variable_name"=\$default_value
+        fi
+      fi
+      # If there is a error, pause for 2 seconds.
+      $success || sleep 2
+    done
+  }
+
+  # Get Replication IP for MASTER host
+  get_single_ip "Enter the Replication IP address for the Server ONE.
+(leave blank to use the default value of $(set_color "green")$SERVER_ONE_IP)$(set_color "normal")" "$SERVER_ONE_IP" SERVER_ONE_IP
+
+  # Get Replication IP for SLAVE host
+  get_single_ip "Enter the Replication IP address for the Server TWO.
+(leave blank to use the default value of $(set_color "green")$SERVER_TWO_IP)$(set_color "normal")" "$SERVER_TWO_IP" SERVER_TWO_IP
+
+  # Get Floating IP for iSCSI storage
+  get_single_ip "Enter the Shared/Floating IP address for iSCSI storage.
+(leave blank to use the default value of $(set_color "green")$REPLICATION_IP_ISCSI)$(set_color "normal")" "$REPLICATION_IP_ISCSI" REPLICATION_IP_ISCSI
+
+  # Get Heuristic IP for HA-Lizard
+  get_single_ip "Enter the Heuristic IP address used by HA-Lizard.
+This IP should be reachable by this host over XenServer management network.${HEURISTIC_IP:+
+(leave blank to use the default value of $(set_color "green")$HEURISTIC_IP)$(set_color "normal")}" "${HEURISTIC_IP:-}" HEURISTIC_IP
+}
+
+#######################################
+# Function to determine the active master and slave in the replication setup
+# Based on the local IP address, it identifies which server is the master
+# and which is the slave. Validates that the replication IPs are set and valid.
+#
+# Globals:
+#   SERVER_ONE_IP (IP of the first server)
+#   SERVER_TWO_IP (IP of the second server)
+#   SERVER_ONE_NAME (Hostname of the first server)
+#   SERVER_TWO_NAME (Hostname of the second server)
+#   ACTIVE_MASTER_NAME (Output: Hostname of the active master)
+#   ACTIVE_MASTER_IP (Output: IP of the active master)
+#   ACTIVE_SLAVE_NAME (Output: Hostname of the active slave)
+#   ACTIVE_SLAVE_IP (Output: IP of the active slave)
+#
+# Returns:
+#   0 if active master and slave are determined successfully
+#   Exits with 1 if replication IPs are not valid or missing
+#######################################
+check_active_master_slave() {
+  # Ensure all required variables are set
+  if [ -z "${SERVER_ONE_IP:-}" ] || [ -z "${SERVER_TWO_IP:-}" ] || [ -z "${SERVER_ONE_NAME:-}" ] || [ -z "${SERVER_TWO_NAME:-}" ]; then
+    echo "Error: One or more required variables are not set."
+    echo "Please ensure that SERVER_ONE_IP, SERVER_TWO_IP, SERVER_ONE_NAME, and SERVER_TWO_NAME are all set. Exiting..."
+    exit 1
+  fi
+
+  # Check if the current server matches SERVER_ONE_IP
+  if ip -4 addr show to "$SERVER_ONE_IP" >/dev/null 2>&1; then
+    # Set master and slave details based on SERVER_ONE as master
+    ACTIVE_MASTER_NAME="$SERVER_ONE_NAME"
+    ACTIVE_MASTER_IP="$SERVER_ONE_IP"
+    ACTIVE_SLAVE_NAME="$SERVER_TWO_NAME"
+    ACTIVE_SLAVE_IP="$SERVER_TWO_IP"
+
+  # Check if the current server matches SERVER_TWO_IP
+  elif ip -4 addr show to "$SERVER_TWO_IP" >/dev/null 2>&1; then
+    # Set master and slave details based on SERVER_TWO as master
+    ACTIVE_MASTER_NAME="$SERVER_TWO_NAME"
+    ACTIVE_MASTER_IP="$SERVER_TWO_IP"
+    ACTIVE_SLAVE_NAME="$SERVER_ONE_NAME"
+    ACTIVE_SLAVE_IP="$SERVER_ONE_IP"
+
+  # Neither IP is configured on this server
+  else
+    echo "Error: Neither SERVER_ONE_IP ($SERVER_ONE_IP) nor SERVER_TWO_IP ($SERVER_TWO_IP) are valid IPs on this server. Exiting..."
+    exit 1
+  fi
+  return 0
+}
+
+#######################################
+# Function to determine replication network parameters
+# Sets up the REPLICATION_SUBNET and REPLICATION_DEV_NAME
+#
+# Args passed in:
+#   None
+#
+# Returns:
+#   0 on success
+#   1 on error (e.g., missing REPLICATION_IP_ISCSI, no suitable interfaces)
+#
+# Global variables set:
+#   REPLICATION_SUBNET        - The subnet derived from REPLICATION_IP_ISCSI
+#   REPLICATION_DEV_NAME      - The selected replication network interface
+#######################################
+get_replication_params() {
+  # Clear the terminal screen for better readability
+  clear
+
+  # Ensure REPLICATION_IP_ISCSI is set
+  if [ -z "$REPLICATION_IP_ISCSI" ]; then
+    echo "Error: REPLICATION_IP_ISCSI is not set. Exiting..."
+    exit 1
+  fi
+
+  # Calculate the replication subnet using a 24-bit mask
+  REPLICATION_SUBNET=$(awk -F. '{print $1"."$2"."$3".0/24"}' <<<"$REPLICATION_IP_ISCSI")
+  echo "Replication subnet determined: $REPLICATION_SUBNET"
+
+  clear
+  while :; do
+    # Display all network interfaces with 'xapi' or 'xenbr'
+    echo "The following interfaces were found on this host:"
+    ip addr show | grep 'inet' | grep -E 'xenbr|xapi'
+    echo
+    echo "Select replication interface:"
+
+    # Retrieve and store all available interfaces in an array
+    mapfile -t replication_dev_list < <(ip addr show | grep -E 'xenbr|xapi' | grep : | awk -F ": " '{print $2}')
+
+    # Exit if no suitable interfaces are found
+    if [[ ${#replication_dev_list[@]} -eq 0 ]]; then
+      echo "No suitable interfaces found. Exiting..."
+      exit 1
+    fi
+
+    # If REPLICATION_DEV_NAME is already set, add it to the list in green
+    if [ -n "$REPLICATION_DEV_NAME" ]; then
+      replication_dev_list=("$REPLICATION_DEV_NAME" "${replication_dev_list[@]}")
+    fi
+
+    # Display each interface with a numeric option for selection
+    for i in "${!replication_dev_list[@]}"; do
+      if [[ "$i" -eq 0 && -n "$REPLICATION_DEV_NAME" ]]; then
+        # Apply color and custom text to the current user's replication interface
+        echo "[$((i + 1))]  $(set_color "green")${replication_dev_list[$i]} (current used)$(set_color "normal")"
+      else
+        echo "[$((i + 1))] ${replication_dev_list[$i]}"
+      fi
+    done
+
+    # Prompt the user to select an interface
+    read -r -p "Enter choice (1-${#replication_dev_list[@]} for the Replication Interface :" replication_dev_index
+
+    # Validate the user's selection and set the replication device name
+    if [[ $replication_dev_index =~ ^[0-9]+$ && "$replication_dev_index" -ge 1 && "$replication_dev_index" -le ${#replication_dev_list[@]} ]]; then
+      REPLICATION_DEV_NAME=${replication_dev_list[$((replication_dev_index - 1))]}
+      echo "Selected Replication Interface: $REPLICATION_DEV_NAME"
+      break
+    else
+      clear
+      echo "Invalid selection [$replication_dev_index]. Please choose between 1 and ${#replication_dev_list[@]}."
+    fi
+  done
+}
+
+# Function to handle the process of selecting a block device
+#
+# This function prompts the user to select a block device for HA storage.
+# If the user chooses to convert local storage to iSCSI-HA storage, it
+# calls the remove_local_storage function to perform the conversion and
+# retrieves the block device path. If the conversion fails, it prompts the
+# user to enter the block device path manually. If the user chooses not to
+# convert local storage, it prompts the user to enter the block device path
+# manually.
+#
+# This function modifies the global variable BLOCK_DEVICE by setting it
+# to the selected block device path.
+#
+# Parameters: none
+#
+# Returns: none
+get_block_device() {
+  local success=false
+
+  # Loop until a valid hostname is entered
+  while [ "$success" = false ]; do
+    # Prompt for the choice to use local storage
+    make_box "Convert local storage to iSCSI-HA storage? <yes> or <no>"
+    read -r USE_LOCAL
+
+    # Handle the user input for local storage selection
+    if [ "$USE_LOCAL" = "yes" ]; then
+      # Try to convert the local storage to HA storage
+      if remove_local_storage; then
+        # If the conversion is successful, retrieve the block device path
+        BLOCK_DEVICE=$(readlink -f "$THIS_HOST_LOCAL_STORAGE_PBD_DEVICE")
+        success=true
+      else
+        # Prompt the user to enter the block device path manually
+        make_box "Error converting local SR to usable block device.
+Enter full path to backing block device to be used for HA storage
+(ex. /dev/sdb)"
+        read -r BLOCK_DEVICE
+      fi
+
+    elif [ "$USE_LOCAL" = "no" ]; then
+      # Prompt the user to enter the block device path manually
+      make_box "Enter full path to backing block device to be used for HA storage
+(ex. /dev/sdb)"
+      read -r BLOCK_DEVICE
+    else
+      # Handle invalid input
+      echo "Invalid entry. Please enter 'yes' or 'no'."
+      sleep 2
+      continue
+    fi
+
+    # Validate the block device path
+    if [ -z "$BLOCK_DEVICE" ] || [ ! -e "$BLOCK_DEVICE" ]; then
+      # Handle invalid block device paths
+      echo "Error: Invalid block device! Either it is not specified or the path is invalid."
+      sleep 2
+      continue
+    fi
+
+    # Check if the block device contains partitions or data
+    if [ -n "$(partprobe -d -s "$BLOCK_DEVICE")" ] && [ "$FLAG_DESTROY_EXISTING_DATA" -eq 0 ]; then
+      # Display a warning message to the user about data destruction
+      make_box "$(set_color "red")
+                            !!!   WARNING   !!!
+                            !!!   WARNING   !!!
+                            !!!   WARNING   !!!
+$(set_color "normal")
+
+The block device $BLOCK_DEVICE contains partitions and/or data.
+
+$(lsblk -f "$BLOCK_DEVICE")
+
+This will be $(set_color "red")ERASED$(set_color "normal") all partitions and/or data on the block device.
+
+Are you absolutely sure you want to DESTROY ALL data on $BLOCK_DEVICE?
+
+Type 'I_Want_To_Destroy' to continue or any other key to exit."
+
+      # Read user input for confirmation
+      read -r user_choice
+      if [ "$user_choice" == "I_Want_To_Destroy" ]; then
+        # Set flag to indicate user wants to destroy existing data
+        FLAG_DESTROY_EXISTING_DATA=1
+        success=true
+      else
+        # Exit if user chooses not to destroy data
+        echo "Please choose another device."
+        sleep 2
+        continue
+      fi
+    # The disk don't contain partitions or data
+    else
+      success=true
+    fi
+
+    # If there is a error, pause for 2 seconds.
+    $success || sleep 2
+
+  done
+  # Print the block device path
+  echo -e "Backing block device set to $BLOCK_DEVICE\r\n"
+}
+
+# Display the IP summary and ask the user to confirm
+# It prompts the user to confirm the IP values entered
+# and exit if the user chooses to cancel
+#
+# Parameters:
+#   None
+#
+# Returns:
+#   0 on success (values confirmed)
+#   1 on error (user cancelled)
+#
+# Global variables used:
+#   SERVER_ONE_NAME
+#   SERVER_ONE_IP
+#   SERVER_TWO_NAME
+#   SERVER_TWO_IP
+#   REPLICATION_IP_ISCSI
+#   REPLICATION_DEV_NAME
+#   BLOCK_DEVICE
+setup_check_summary() {
+  # Display the IP summary and ask the user to confirm
+  make_box "Please review theses configurations before proceeding:
+
+Server ONE Replication Name: $SERVER_ONE_NAME
+Server ONE Replication IP: $SERVER_ONE_IP
+Server TWO Replication Name: $SERVER_TWO_NAME
+Server TWO Replication IP: $SERVER_TWO_IP
+
+$(set_color "green")Active MASTER: $ACTIVE_MASTER_NAME ($ACTIVE_MASTER_IP) $(set_color "normal")
+$(set_color "green")Active SLAVE: $ACTIVE_SLAVE_NAME ($ACTIVE_SLAVE_IP) $(set_color "normal")
+
+Shared iSCSI IP: $REPLICATION_IP_ISCSI
+
+Replication Interface: $REPLICATION_DEV_NAME
+$(set_color "yellow")Replication Block Device: $BLOCK_DEVICE $(set_color "normal")"
+
+  # Ask the user to confirm
+  read -p "Press <Enter> to confirm or any other key to cancel." -r confirmation
+
+  # If the user presses Enter (blank input), proceed
+  if [ -z "$confirmation" ]; then
+    echo "Configuration confirmed. Proceeding with the installation."
+    return 0 # Values confirmed
+  else
+    echo "Configuration cancelled. Exiting..."
+    exit 1 # Exit if anything other than Enter is pressed
+  fi
+}
+
+################################################################
+#
+# Block for functions that apply changes or configure the system
+# Executes actions to implement user-defined or automated changes
+#
+################################################################
+
+#######################################
+# function remove_local_storage
+# Removes the default local SR created
+# on a new XenServer installation
+#
+# Args passed in:
+#   None
+#
+# Returns:
+#   0 on success
+#   1 on general error
+#
+# Global variable set in case a
+# rollback is required:
+#   THIS_HOST_LOCAL_STORAGE_PBD_DEVICE
+########################################
+# TODO: we should remove local storage in both servers
+remove_local_storage() {
+  # Get the local storage SR UUID for the host
+  this_host_local_storage=$(xe sr-list type=lvm host="$(hostname)" --minimal)
+  if [ -z "$this_host_local_storage" ]; then
+    echo "Failed to locate SR for local storage"
+    return 1
+  fi
+
+  # Get the PBD UUID for the local storage SR
+  this_host_local_storage_pbd=$(xe pbd-list sr-uuid="$this_host_local_storage" --minimal)
+  if [ -z "$this_host_local_storage_pbd" ]; then
+    echo "Failed to locate PBD for local storage"
+    return 1
+  fi
+
+  # Get the device path for the PBD
+  THIS_HOST_LOCAL_STORAGE_PBD_DEVICE=$(xe pbd-param-get uuid="$this_host_local_storage_pbd" param-name=device-config param-key=device)
+
+  # Retrieve and canonicalize the device path for the specified PBD.
+  # Example: If the PBD points to a symlink like /dev/sdb1,
+  # `readlink -e` will resolve it to the canonical path, such as /dev/mapper/vg00-lv00.
+  THIS_HOST_LOCAL_STORAGE_PBD_DEVICE=$(readlink -e "$THIS_HOST_LOCAL_STORAGE_PBD_DEVICE")
+
+  # Check if the device path is valid
+  if [ -n "$THIS_HOST_LOCAL_STORAGE_PBD_DEVICE" ]; then
+    # Write device path to disk
+    if [ -d /var/lib/iscsi-ha/state ]; then
+      echo "$THIS_HOST_LOCAL_STORAGE_PBD_DEVICE" >/var/lib/iscsi-ha/state/local_storage_device
+    else
+      echo "$THIS_HOST_LOCAL_STORAGE_PBD_DEVICE" >/tmp/local_storage_device
+    fi
+  fi
+
+  # Display information for confirmation
+  echo "Hostname detected = $(hostname)"
+  echo "Local Storage SR UUID discovered = $this_host_local_storage"
+  echo "Local Storage PBD UUID discovered = $this_host_local_storage_pbd"
+  echo
+  read -p "Press <Enter> to confirm or any other key to cancel." -r confirmation
+
+  # If the user presses Enter (blank input), proceed
+  if [ -z "$confirmation" ]; then
+
+    # Unplug PBD
+    echo "Unplugging PBD $this_host_local_storage_pbd"
+    if ! xe pbd-unplug uuid="$this_host_local_storage_pbd"; then
+      echo "Error detected while unplugging PBD $this_host_local_storage_pbd. Exiting"
+      return 1
+    fi
+    sleep 1
+    echo
+
+    # Destroy PBD
+    echo "Destroying PBD $this_host_local_storage_pbd"
+    if ! xe pbd-destroy uuid="$this_host_local_storage_pbd"; then
+      echo "Error detected while destroying PBD $this_host_local_storage_pbd. Exiting"
+      return 1
+    fi
+    sleep 1
+    echo
+
+    # Remove SR
+    echo "Removing Storage $this_host_local_storage"
+    if ! xe sr-forget uuid="$this_host_local_storage"; then
+      echo "Error detected while removing storage $this_host_local_storage. Exiting"
+      exit 1
+    fi
+
+    echo "Local storage repository has been successfully removed"
+    return 0
+  else
+    echo "Configuration cancelled. Exiting..."
+    exit 1 # Exit if anything other than Enter is pressed
+  fi
+
+}
+################################################
+# function restore_local_storage
+# Reinitializes the default XenServer local SR
+# in case a rollback is required to bring the
+# host's storage back to the default setting
+#
+# Args passed in:
+# None - but function expects to find the
+# path to the storage device in
+# /tmp/local_storage_device        OR
+# /etc/iscsi-ha/state/local_storage_device
+#
+# Returns:
+# 0 on success
+# 1 on general error
+#
+################################################
+restore_local_storage() {
+  local device
+  local -r this_host_uuid=$(xe host-list name-label="$(hostname)" --minimal)
+
+  if [ -f "/etc/iscsi-ha/state/local_storage_device" ]; then
+    device="$(</etc/iscsi-ha/state/local_storage_device)"
+  elif [ -f "/tmp/local_storage_device" ]; then
+    device="$(</tmp/local_storage_device)"
+  else
+    printf 'Missing device configuration /tmp/local_storage_device' >&2
+    return 1
+  fi
+
+  if xe sr-create content-type=user device-config:device="$device" \
+    host-uuid="$this_host_uuid" name-label='Local storage' shared=false type=lvm; then
+    return 0
+  else
+    return 1
+  fi
+}
+
+###########################################
+# Function setup_rollback
+# Restores the system to its default state by
+# removing configurations and settings applied
+# during the setup process.
+#
+# This function performs the following actions:
+# - Removes the DRBD configuration file, if specified.
+# - Rolls back firewall rules with a specific comment.
+# - Removes LVM filters related to DRBD devices.
+#
+# Args:
+#   None
+#
+# Returns:
+#   0 on successful rollback
+#   1 if any errors occur during the rollback process
+###########################################
+setup_rollback() {
+
+  # TODO: double check this
+  echo "Rolling back setup..."
+
+  # Initialize a status variable to track overall success or failure
+  local status=0
+
+  ######################################
+  # Remove DRBD Configuration File
+  ######################################
+  # If the DRBD configuration file path is defined, attempt to remove it.
+  if [ -n "$DRBD_CONF_FILE" ]; then
+    echo "Attempting to remove DRBD configuration file: $DRBD_CONF_FILE"
+
+    # Backup the DRBD configuration file before removing it
+    backup_file "$DRBD_CONF_FILE"
+
+    # Remove the file and check for errors
+    if ! rm -f "$DRBD_CONF_FILE"; then
+      echo "Error: Failed to remove DRBD configuration file: $DRBD_CONF_FILE."
+      status=1 # Mark the operation as failed
+    else
+      echo "DRBD configuration file removed successfully."
+    fi
+  else
+    echo "No DRBD configuration file specified. Skipping."
+  fi
+
+  ######################################
+  # Rollback Firewall Rules
+  ######################################
+  echo "Checking and removing firewall rules with the comment 'ISCSI-CFG Allow traffic from replication subnet'..."
+
+  # Extract rule numbers of matching firewall rules based on the comment
+  rule_numbers=$(iptables -L INPUT --line-numbers -v -n | grep -i 'ISCSI-CFG Allow traffic from replication subnet' | awk '{print $1}' | sort -nr)
+
+  # If matching rules are found, iterate over them to remove each
+  if [ -n "$rule_numbers" ]; then
+    for rule_number in $rule_numbers; do
+      # Delete the rule and verify success
+      if iptables -D INPUT "$rule_number"; then
+        echo "Firewall rule at line $rule_number removed successfully."
+      else
+        echo "Error: Failed to remove firewall rule at line $rule_number."
+        status=1 # Mark the operation as failed
+      fi
+    done
+
+    # Restart the iptables service to apply changes
+    echo "Restarting iptables service..."
+    if ! service iptables restart; then
+      echo "Error: Failed to restart iptables service. Please check manually."
+      status=1 # Mark the operation as failed
+    else
+      echo "iptables service restarted successfully."
+    fi
+  else
+    echo "No firewall rules found matching the specified comment. Skipping."
+  fi
+
+  ######################################
+  # Rollback LVM Filters
+  ######################################
+  # If the LVM configuration file path is defined, attempt to clean up the filters.
+  if [ -z "${LVM_CONF+x}" ] || [ ${#LVM_CONF[@]} -eq 0 ]; then
+    echo "Checking and removing LVM filter lines starting with 'filter = [ \"r|/dev/drbd.*|\"' from: $LVM_CONF"
+    for lvm_conf in "${LVM_CONF[@]}"; do
+      if [ ! -f "$lvm_conf" ]; then
+        echo "Error: $lvm_conf does not exist. Skipping..."
+        continue
+      fi
+      # Backup lvm files configuration
+      backup_file "$lvm_conf"
+      # Use `sed` to locate and delete lines in the LVM configuration file
+      # that start with the specific pattern: 'filter = [ "r|/dev/drbd.*|", ...'.
+      #
+      # The regex breakdown:
+      # - ^\s*: Matches the beginning of the line and allows for leading whitespace.
+      # - filter = \[ "r|\/dev\/drbd\.\*|": Matches the exact text 'filter = [ "r|/dev/drbd.*|'.
+      # - .*$: Ensures the rest of the line (which may contain additional filters) is also matched.
+      # This ensures that only lines beginning with the specified filter format are targeted
+      if ! sed -i '/^\s*filter = \[ "r|\/dev\/drbd\.\*|".*$/d' "$lvm_conf"; then
+        echo "Error: Failed to remove LVM filter from the configuration file: $lvm_conf."
+        status=1 # Mark the operation as failed
+      else
+        echo "LVM filter lines removed successfully."
+      fi
+    done
+  else
+    echo "No LVM configuration file specified. Skipping."
+  fi
+
+  ######################################
+  # Final Message to the User
+  ######################################
+  # Display a reminder message for manual cleanup of iSCSI SRs
+  make_box "!!! IMPORTANT !!!
+
+Remember to delete the iSCSI SR from the pool before setting up again"
+
+  # Return the overall status of the rollback process
+  return $status
+}
+
+######################################
+# Function to update firewall rules
+# to permit traffic from the replication subnet
+######################################
+
+firewall_update() {
+  # Inform the user about the firewall update
+  echo "Adding firewall rules to allow traffic between hosts on the replication subnet."
+
+  # Check if the REPLICATION_SUBNET is defined and not empty
+  if [ -z "$REPLICATION_SUBNET" ]; then
+    echo "Error: REPLICATION_SUBNET is not set."
+    exit 1
+  fi
+
+  # File to back up before saving iptables rules
+  IPTABLES_RULES_FILE="/etc/sysconfig/iptables"
+
+  # Backup the iptables rules file before saving
+  if [[ -f "$IPTABLES_RULES_FILE" ]]; then
+    backup_file "$IPTABLES_RULES_FILE"
+  else
+    echo "Warning: $IPTABLES_RULES_FILE not found. Skipping backup."
+  fi
+
+  # Check if the rule already exists
+  # NOTE: iptables commands expect individual arguments for the rule components (e.g., -s, -m comment, --comment),
+  # which are not a single string. Wrapping the rule components in a single string ("$RULE") will cause a syntax error.
+  if iptables -C INPUT -s "$REPLICATION_SUBNET" -m comment --comment 'ISCSI-CFG Allow traffic from replication subnet' 2>/dev/null; then
+    echo "Firewall rule already exists. Skipping."
+  else
+    # Append the rule to the INPUT table
+    iptables -A INPUT -s "$REPLICATION_SUBNET" -m comment --comment 'ISCSI-CFG Allow traffic from replication subnet'
+    echo "Firewall rule added successfully."
+  fi
+
+  # Save the iptables rules to ensure persistence across reboots
+  if ! service iptables save; then
+    echo "Error: Failed to save iptables rules."
+    exit 1
+  fi
+
+  # Restart the iptables service to apply the new rules
+  if ! service iptables restart; then
+    echo "Error: Failed to restart iptables service."
+    exit 1
+  fi
+
+  # Confirm successful update of firewall rules
+  echo "Firewall rules have been updated successfully."
+}
+
+###################################
+# Function to update the LVM filter for all configuration files
+#
+# This function updates the LVM configuration files by inserting a filter to block
+# specific devices. LVM should only see logical volumes (LV) through iSCSI/TGT
+# services. The filter blocks the provided block device (via the global BLOCK_DEVICE
+# variable) and any devices matching the pattern for DRBD devices.
+#
+# The function iterates over each configuration file listed in the global LVM_CONF
+# array and inserts the filter line after the 'devices {' section. Before updating,
+# it ensures that both the LVM_CONF and BLOCK_DEVICE variables are set and non-empty.
+# If either of them is not set, the function exits with an error.
+#
+# Returns: None
+###################################
+lvm_update_filter() {
+
+  # Validate if BLOCK_DEVICE is set
+  if [ -z "$BLOCK_DEVICE" ]; then
+    echo "Error: BLOCK_DEVICE is not set. Exiting..."
+    exit 1
+  fi
+
+  # Validate if LVM_CONF is set and is an array
+  if [ -z "${LVM_CONF+x}" ] || [ ${#LVM_CONF[@]} -eq 0 ]; then
+    echo "Error: LVM_CONF is not set or is empty. Exiting..."
+    exit 1
+  fi
+
+  # Define the LVM filter string
+  # NOTE: do not change the order of the filter or remember to update the setup_rollback regex
+  local lv_filter="    filter = [ \"r|/dev/drbd[0-9]*|\", \"r|$BLOCK_DEVICE|\" ]"
+
+  # Iterate over each LVM configuration file
+  for lvm_conf in "${LVM_CONF[@]}"; do
+    # Check if the file exists
+    if [ ! -f "$lvm_conf" ]; then
+      echo "Error: $lvm_conf does not exist. Skipping..."
+      continue
+    fi
+
+    # Backup lvm files configuration
+    backup_file "$lvm_conf"
+
+    # Find the line number of 'devices {' in the configuration file
+    local lvm_devices_line_begin
+    lvm_devices_line_begin=$(grep -n 'devices {' "$lvm_conf" | awk -F: '{print $1}')
+
+    # If the line is found, insert the filter line after it
+    if [ -n "$lvm_devices_line_begin" ]; then
+      local lvm_insert_row_number
+      lvm_insert_row_number=$((lvm_devices_line_begin + 1))
+      sed -i "${lvm_insert_row_number}i $lv_filter" "$lvm_conf" || {
+        echo "Error: Failed to update $lvm_conf with filter. Exiting..."
+        exit 1
+      }
+    else
+      echo "Error: 'devices {' not found in $lvm_conf. Skipping..."
+      continue
+    fi
+  done
+}
+
+#####################################
+# This code configures DRBD (Distributed Replicated Block Device) sync speeds
+# by gathering and evaluating disk throughput and replication link performance
+# metrics. It helps determine the optimal sync speeds for initial synchronization
+# and resync operations.
+#
+# The script allows users to select the desired replication link speed from predefined
+# options (ranging from 100Mbps to 40Gbps) and disk throughput values. These selections
+# are used to calculate the appropriate DRBD sync rates for both maximum and minimum
+# transfer speeds (c-max-rate and c-min-rate), ensuring efficient data replication.
+#
+# This configuration is specifically designed for setting up DRBD replication
+# synchronization parameters and is not intended for ongoing replication performance
+# adjustments, which depend on the hardware's capabilities.
+#####################################
+
+# Use the value of C_MIN_RATE_SCALE_FACTOR if it's set, otherwise use 3 as the default
+C_MIN_RATE_SCALE_FACTOR="${C_MIN_RATE_SCALE_FACTOR:-3}"
+
+# Prompt the user to select the replication link speed.
+#
+# This function displays a list of predefined replication link speeds
+# (ranging from 100Mbps to 40Gbps) and asks the user to select a speed
+# by entering the corresponding number. If LINK_SPEED_BYTES is set on user
+# local config, add it as the first option. The selected speed is stored in
+# the variable $link_speed and its byte equivalent is stored in
+# $LINK_SPEED_BYTES.
+drbd_get_link_speed() {
+  # Replication link speed options in bps
+  declare -a link_speed_list=(
+    100000000   # 100Mbps
+    1000000000  # 1Gbps
+    2000000000  # 2Gbps
+    2500000000  # 2.5Gbps
+    5000000000  # 5Gbps
+    10000000000 # 10Gbps
+    20000000000 # 20Gbps
+    40000000000 # 40Gbps
+  )
+
+  # If LINK_SPEED_BYTES is set on user local config, add it as the first option
+  if [ -n "$LINK_SPEED_BYTES" ]; then
+    link_speed_list=("$LINK_SPEED_BYTES" "${link_speed_list[@]}")
+  fi
+
+  clear
+  while :; do
+    echo "Select replication link speed (in Mbps):"
+    echo "Note: The options are listed in Mbps (megabits per second)."
+
+    # Display the list of options
+    for i in "${!link_speed_list[@]}"; do
+      if [[ "$i" -eq 0 && -n "$LINK_SPEED_BYTES" ]]; then
+        # Apply color and custom text to the current user's link speed
+        echo "[$((i + 1))]  $(set_color "green")$((link_speed_list[i] / 1000000)) Mbps (current used speed)$(set_color "normal")"
+      else
+        # Display numeric speeds as Mbps (no text formatting for other options)
+        echo "[$((i + 1))]  $((link_speed_list[i] / 1000000)) Mbps"
+      fi
+    done
+
+    read -r -p "Enter choice (1-${#link_speed_list[@]}): " link_speed_index
+
+    if [[ "$link_speed_index" -ge 1 && "$link_speed_index" -le ${#link_speed_list[@]} ]]; then
+      # Use the selected speed from the list
+      link_speed=${link_speed_list[$((link_speed_index - 1))]}
+      # If the user selected a speed from the list, convert to LINK_SPEED_BYTES
+      LINK_SPEED_BYTES=$((link_speed / 8))
+      break
+    else
+      clear
+      echo "Invalid selection [$link_speed_index]. Please choose between 1 and ${#link_speed_list[@]}."
+    fi
+  done
+}
+
+# Prompt the user to select the disk throughput speed.
+#
+# This function displays a list of predefined disk throughput options
+# (ranging from 100MiB/s to 1000MiB/s or greater) and asks the user to select a
+# speed by entering the corresponding number. The selected speed is stored in
+# the variable $DISK_SPEED.
+#
+# If DISK_SPEED is set on user local config, add it as the first option in the list.
+#
+# The function will display the selected speed in MiB/s and store it in DISK_SPEED.
+drbd_get_disk_throughput() {
+  local -a disk_speed_list
+
+  # Predefined disk throughput options in bytes per second (Bps)
+  disk_speed_list=(
+    104857600  # 100MiB/s
+    157286400  # 150MiB/s
+    209715200  # 200MiB/s
+    262144000  # 250MiB/s
+    314572800  # 300MiB/s
+    419430400  # 400MiB/s
+    524288000  # 500MiB/s
+    629145600  # 600MiB/s
+    734003200  # 700MiB/s
+    838860800  # 800MiB/s
+    943718400  # 900MiB/s
+    1048576000 # 1000MiB/s or greater
+  )
+
+  # If DISK_SPEED is set on user local config, add it as the first option
+  if [[ -n "$DISK_SPEED" ]]; then
+    disk_speed_list=("$DISK_SPEED" "${disk_speed_list[@]}")
+  fi
+
+  clear
+  while :; do
+    echo "Select disk throughput speed (in MiB/s):"
+    echo "Note: The options are listed in MiB/s (mebibytes per second)."
+
+    # Display the list of options
+    for i in "${!disk_speed_list[@]}"; do
+      if [[ "$i" -eq 0 && -n "$DISK_SPEED" ]]; then
+        # Apply color and custom text to the current user's disk speed
+        echo "[$((i + 1))]  $(set_color "green")$((disk_speed_list[i] / 1048576)) MiB/s (current used speed)$(set_color "normal")"
+      else
+        # Display numeric speeds as MiB/s (no text formatting for other options)
+        echo "[$((i + 1))]  $((disk_speed_list[i] / 1048576)) MiB/s"
+      fi
+    done
+
+    read -r -p "Enter choice (1-${#disk_speed_list[@]}) for Disk Speed : " disk_speed_index
+    # Validate if the user input is a number between 1 and ${#disk_speed_list[@]}
+    if [[ "$disk_speed_index" =~ ^[0-9]+$ && "$disk_speed_index" -ge 1 && "$disk_speed_index" -le ${#disk_speed_list[@]} ]]; then
+      DISK_SPEED=${disk_speed_list[$((disk_speed_index - 1))]}
+      echo "Selected disk throughput: $((DISK_SPEED / 1048576)) MiB/s"
+      break
+    else
+      clear
+      echo "Invalid selection [$disk_speed_index]. Please choose between 1 and ${#disk_speed_list[@]}."
+    fi
+  done
+}
+
+# Calculate DRBD sync rates using user input for link speed and disk throughput.
+# The function will determine the maximum sync rate (c-max-rate) based on the
+# limiting factor and then calculate the minimum sync rate (c-min-rate) as a
+# fraction of c-max-rate, using a default or user-specified scaling factor.
+# The function will ensure that the calculated c-max-rate is reasonable and
+# that the calculated c-min-rate is not too low.
+drbd_calculate_rates() {
+  clear
+
+  # Validate inputs
+  if [[ -z $LINK_SPEED_BYTES || -z $DISK_SPEED ]]; then
+    echo "Error: Link speed and disk throughput must be selected before calculating rates."
+    exit 1
+  fi
+
+  # Convert link speed from bps to Bps (bytes per second)
+  LINK_SPEED_BPS=$((LINK_SPEED_BYTES * 8)) # Convert from Bps to bps
+
+  # Determine c-max-rate based on the limiting factor
+  if [[ $DISK_SPEED -gt $LINK_SPEED_BPS ]]; then
+    echo "Link speed [${LINK_SPEED_BYTES}Bps] is less than disk throughput [${DISK_SPEED}Bps]"
+    # Convert link speed from Bps to MiB/s
+    C_MAX_RATE=$((LINK_SPEED_BYTES / 1048576)) # Convert to MiB/s
+  else
+    echo "Disk throughput [${DISK_SPEED}Bps] is less than link speed [${LINK_SPEED_BYTES}Bps]"
+    # Convert disk speed from Bps to MiB/s
+    C_MAX_RATE=$((DISK_SPEED / 1048576)) # Convert to MiB/s
+  fi
+
+  # Allow user to modify c-min-rate scaling factor
+  read -r -p "Enter scaling factor for c-min-rate (default: ${C_MIN_RATE_SCALE_FACTOR}): " input_scale_factor
+  if [[ "$input_scale_factor" =~ ^[1-9][0-9]*$ ]]; then
+    C_MIN_RATE_SCALE_FACTOR=$input_scale_factor
+  fi
+
+  # Ensure c-max-rate is reasonable
+  if [[ $C_MAX_RATE -lt 1 ]]; then
+    echo "Error: Calculated c-max-rate is too low [$C_MAX_RATE MiB/s]. Check input values."
+    exit 1
+  fi
+
+  echo "c-max-rate has been set to [${C_MAX_RATE} MiB/s]"
+
+  # Calculate c-min-rate dynamically based on the scaling factor
+  C_MIN_RATE=$((C_MAX_RATE / C_MIN_RATE_SCALE_FACTOR))
+  echo "c-min-rate has been set to [${C_MIN_RATE} MiB/s]"
+}
+
+# Generates the DRBD configuration file
+#
+# This function creates a DRBD configuration file using predefined
+# and calculated parameters for disk and network settings. It includes
+# settings for minimum and maximum sync rates, network buffers, and
+# split-brain handlers. A random secure password is generated for use
+# as a shared secret in the configuration. The resulting configuration
+# file is saved to the path specified by $DRBD_CONF_FILE.
+#
+# Prerequisites:
+# - Variables C_MIN_RATE, C_MAX_RATE, SERVER_ONE_NAME, SERVER_TWO_NAME,
+#   BLOCK_DEVICE, SERVER_ONE_IP, SERVER_TWO_IP, and
+#   DRBD_CONF_FILE must be set prior to calling this function.
+#
+# Outputs:
+# - Writes the DRBD configuration file to $DRBD_CONF_FILE.
+drbd_update_conf() {
+  local -r random_password=$(tr -dc 'A-Za-z0-9!?%=' </dev/urandom | head -c 24)
+
+  # Backup the existing DRBD configuration file
+  backup_file "$DRBD_CONF_FILE"
+
+  cat <<EOF >"$DRBD_CONF_FILE"
+global {
+    usage-count no;
+}
+
+common {
+    disk {
+        c-min-rate ${C_MIN_RATE}M;
+        c-max-rate ${C_MAX_RATE}M;
+        c-fill-target 1M;
+    }
+
+    net {
+        max-buffers 60000;
+        after-sb-0pri discard-zero-changes;
+        after-sb-1pri consensus;
+        cram-hmac-alg sha1;
+        shared-secret $random_password;
+    }
+
+    handlers {
+        split-brain "/etc/iscsi-ha/scripts/drbd-split-brain-alert";
+    }
+}
+
+resource iscsi1 {
+    protocol C;
+
+    on ${SERVER_ONE_NAME} {
+        device /dev/drbd1;
+        disk ${BLOCK_DEVICE};
+        address ${SERVER_ONE_IP}:7789;
+        meta-disk internal;
+    }
+
+    on ${SERVER_TWO_NAME} {
+        device /dev/drbd1;
+        disk ${BLOCK_DEVICE};
+        address ${SERVER_TWO_IP}:7789;
+        meta-disk internal;
+    }
+}
+EOF
+
+  # Check if the DRBD configuration file was generated successfully
+  if drbdadm --dry-run dump; then
+    echo "DRBD configuration file has been generated at $DRBD_CONF_FILE"
+  else
+    echo "Error: Failed to generate DRBD configuration file at $DRBD_CONF_FILE. Exiting..."
+    exit 1
+  fi
+
+}
+
+######################################
+# Initialize DRBD Configuration and Start Replication
+# This function prepares the DRBD setup by performing:
+# - ARP updates for the replication network
+# - DRBD metadata creation
+# - Service startup
+# - Synchronization setup for master/slave hosts
+#
+# Prerequisites:
+# - Variables REPLICATION_DEV_NAME, BLOCK_DEVICE, POOL_ROLE, and
+#   SERVER_TWO_NAME must be set prior to calling this function.
+#
+# Outputs:
+# - Writes an ARP update to the replication network interface
+# - Creates DRBD metadata for the specified resource
+# - Starts the DRBD service
+# - Performs synchronization if the current state is "master"
+######################################
+drbd_initialize() {
+  # Send ARP updates for the replication network interface
+  echo "Sending ARP update on replication interface"
+  if ! send_network_bridge_arp "$REPLICATION_DEV_NAME"; then
+    echo "Error: Failed to send ARP update on $REPLICATION_DEV_NAME" >&2
+    return 1
+  fi
+
+  # Display a message indicating DRBD initialization
+  make_box "Initializing DRBD...
+This host will wait until its peer connects.
+Installation will resume after the DRBD peers connect."
+  sleep 1
+
+  # Check for existing DRBD metadata on the block device
+  if drbdadm dump-md all 2>&1 | grep -q "$BLOCK_DEVICE" && [ "$FLAG_DESTROY_EXISTING_DATA" -eq 0 ]; then
+    # Warn the user about existing metadata and provide choices
+    while true; do
+      make_box "$(set_color "red")
+                           !!!   WARNING   !!!
+                           !!!   WARNING   !!!
+                           !!!   WARNING   !!!
+$(set_color "normal")
+
+This setup is intended for a new installation from scratch. However, the
+block device $BLOCK_DEVICE already contains DRBD metadata.
+
+You must choose between:
+
+- Using the existing data
+OR
+- $(set_color "red")ERASING$(set_color "normal") all data and recreating.
+
+Type one of the following options:
+'I_Want_To_Destroy_Data' to destroy data
+'Use_Data' to retain it
+'exit' to exit"
+
+      read -r user_choice
+      case "$user_choice" in
+      I_Want_To_Destroy_Data)
+        make_box "Last Time: Are you sure you want to DESTROY all data? Type 'yes' to confirm."
+        read -r user_last_opportunity_choice
+        if [ "$user_last_opportunity_choice" == "yes" ]; then
+          FLAG_DESTROY_EXISTING_DATA=1
+          break
+        fi
+        ;;
+      Use_Data)
+        FLAG_DESTROY_EXISTING_DATA=0 # Explicitly set to retain data
+        break
+        ;;
+      exit)
+        make_box "
+Exiting DRBD initialization without making changes to the disk.
+Nevertheless, some changes have been made to the system.
+You can rerun the script or revert the changes using the --rollback flag.
+"
+        exit 1
+        ;;
+      esac
+    done
+  fi
+
+  if [ "$FLAG_DESTROY_EXISTING_DATA" -eq 1 ]; then
+    # Zero out the DRBD block device to ensure a clean state
+    echo "Zeroing out DRBD block device: $BLOCK_DEVICE"
+    if ! dd if=/dev/zero bs=1M count=1 of="$BLOCK_DEVICE" status=none; then
+      echo "Error: Failed to write to $BLOCK_DEVICE" >&2
+      return 1
+    fi
+
+    # Create DRBD metadata for the specified resource
+    echo "Creating DRBD metadata for iscsi1"
+    if ! drbdadm create-md iscsi1; then
+      echo "Error: Failed to create DRBD metadata for iscsi1" >&2
+      return 1
+    fi
+  fi
+
+  # Start the DRBD service
+  echo "Starting DRBD service"
+  if ! service drbd start; then
+    echo "Error: Failed to start DRBD service" >&2
+    return 1
+  fi
+
+  # Additional DRBD syncer configuration for kernels older than 3.x.x
+  if [ "$(uname -r | cut -d'.' -f1)" -lt 3 ]; then
+    echo "Running drbdadm syncer for iscsi1"
+    if ! drbdadm syncer iscsi1; then
+      echo "Error: Failed to run drbdadm syncer for iscsi1" >&2
+      return 1
+    fi
+  fi
+
+  # Perform synchronization if the current state is "master"
+  # show the users the status of the sync ?
+  if [ "$POOL_ROLE" = "master" ]; then
+    echo "Synchronizing storage with peer/slave host..."
+
+    # Attempt to start the synchronization process in the background
+    drbdadm -- --overwrite-data-of-peer primary iscsi1 >/dev/null 2>&1 &
+    local drbd_pid=$!
+
+    # Allow a moment for the process to fail if there are immediate issues
+    sleep 5
+
+    # Check if the process is still running
+    if ! kill -0 "$drbd_pid" >/dev/null 2>&1; then
+      echo "Error: Failed to start DRBD overwrite-data-of-peer synchronization. Check the kernel logs for more information."
+      return 1
+    fi
+
+    echo "DRBD synchronization started successfully in the background (PID: $drbd_pid)."
+    echo "You can monitor the sync status using the 'cat /proc/drbd' or 'drbdadm status' commands."
+  fi
+
+  echo "DRBD initialization completed successfully"
+}
+
+# TODO: Maybe use a function to format the speeds using thousand separators ?
+# example: echo "$speed" | sed ':a;s/\B[0-9]\{3\}\>/.&/;ta'
+
+# Sync configuration files to the specified remote server.
+# Parameters:
+#   ACTIVE_SLAVE_NAME - The name of the active slave server.
+#   ACTIVE_SLAVE_IP - The IP address of the active slave server.
+#   LVM_CONF - Array of LVM configuration files.
+#   DRBD_CONF_FILE - Path to the DRBD configuration file.
+#   IPTABLES_RULES_FILE - Path to the IPTABLES rules file.
+# Returns:
+#   0 on success, 1 on failure.
+sync_config_files() {
+  # Validate input variables
+  if [[ -z "$ACTIVE_SLAVE_NAME" || -z "$ACTIVE_SLAVE_IP" ]]; then
+    echo "Error: Missing ACTIVE_SLAVE_NAME or ACTIVE_SLAVE_IP."
+    return 1
+  fi
+
+  if [[ ${#LVM_CONF[@]} -eq 0 || -z "$DRBD_CONF_FILE" || -z "$IPTABLES_RULES_FILE" ]]; then
+    echo "Error: Missing configuration files."
+    return 1
+  fi
+
+  # Inform the user of the start of the synchronization process
+  echo "Starting synchronization of configuration files with server $ACTIVE_SLAVE_NAME ($ACTIVE_SLAVE_IP)..."
+
+  # Attempt to sync the files with the remote server
+  if ! sync_files "$ACTIVE_SLAVE_IP" "${LVM_CONF[@]}" "$DRBD_CONF_FILE" "$IPTABLES_RULES_FILE"; then
+    echo "Error: You can try running it again using the --sync flag."
+    return 1
+  fi
+
+  # Successful synchronization
+  return 0
+}
+
+# Restarts the HA-Lizard services on the remote server specified by
+# ACTIVE_SLAVE_NAME and ACTIVE_SLAVE_IP.
+#
+# Parameters:
+#   ACTIVE_SLAVE_NAME - The name of the active slave server.
+#   ACTIVE_SLAVE_IP - The IP address of the active slave server.
+#
+# Returns:
+#   0 on success, 1 on failure.
+restart_remote_services() {
+  # Validate input variables
+  if [[ -z "$ACTIVE_SLAVE_NAME" || -z "$ACTIVE_SLAVE_IP" ]]; then
+    echo "Error: Missing ACTIVE_SLAVE_NAME or ACTIVE_SLAVE_IP."
+    return 1
+  fi
+
+  # Inform the user of the start of the synchronization process
+  echo "Restarting services on server $ACTIVE_SLAVE_NAME ($ACTIVE_SLAVE_IP)..."
+
+  # Restart the HA-Lizard services on the remote server
+  if ! service_execute_remote "$ACTIVE_SLAVE_IP" restart ha-lizard iscsi-ha; then
+    echo "Error: You can try running it again using the --sync flag."
+    return 1
+  fi
+
+  # Successful synchronization
+  return 0
+
+}
+
+update_iscsi_user_config() {
+  echo "Updating USER configuration file ($LOCAL_CONFIG_FILE)..."
+
+  # List of global variable names
+  config_vars=(
+    "BLOCK_DEVICE"
+    "C_MIN_RATE_SCALE_FACTOR"
+    "DISK_SPEED"
+    "HEURISTIC_IP"
+    "LINK_SPEED_BYTES"
+    "REPLICATION_DEV_NAME"
+    "REPLICATION_IP_ISCSI"
+    "REPLICATION_SUBNET"
+    "SERVER_ONE_IP"
+    "SERVER_ONE_NAME"
+    "SERVER_TWO_IP"
+    "SERVER_TWO_NAME"
+  )
+
+  # Iterate over the array and process each variable
+  for var_name in "${config_vars[@]}"; do
+    # Retrieve the value of the variable dynamically
+    param_value="${!var_name}"
+
+    # Check if the variable is set before attempting to access it
+    if [ "$param_value" ]; then
+      # Special case for LINK_SPEED_BYTES to convert to Mbps
+      if [ "$var_name" = "LINK_SPEED_BYTES" ]; then
+        param_value=$((param_value * 8))
+      fi
+      # Call the function to update the local configuration file
+      if update_local_conf "$LOCAL_CONFIG_FILE" "$var_name" "$param_value"; then
+        echo "Updated: $var_name=$param_value"
+      else
+        echo "Failed to update $var_name in $LOCAL_CONFIG_FILE"
+      fi
+
+    fi
+  done
+}
+
+# Parse command-line arguments and check if getopt failed
+if ! FLAG_TEMP=$(getopt -o "h,i,ns,r,s" --long "destroy-existing-data,dry-run,help,ignore-host-check,no-slave,rollback,sync" -n "iscsi-cfg-setup" -- "$@"); then
+  exit 1
+fi
+# Apply the parsed arguments
+eval set -- "$FLAG_TEMP"
+
+# Now you can process the options
+while true; do
+  case "$1" in
+  --destroy-existing-data)
+    FLAG_DESTROY_EXISTING_DATA=1
+    shift
+    ;;
+  --dry-run)
+    FLAG_DRY_RUN=1
+    shift
+    ;;
+  -h | --help)
+    # Display the man page for the script
+    man "$(basename "$0")"
+    exit 0
+    ;;
+  -i | --ignore-host-check)
+    FLAG_IGNORE_HOST_CHECK=1
+    shift
+    ;;
+  -ns | --no-slave)
+    FLAG_NO_SLAVE=1
+    shift
+    ;;
+  -r | --rollback)
+    FLAG_ROLLBACK=1
+    shift
+    ;;
+  -s | --sync)
+    FLAG_SYNC=1
+    shift
+    ;;
+  --)
+    shift
+    break
+    ;;
+  *)
+    echo "Invalid option $1"
+    exit 1
+    ;;
+  esac
+done
+
+# Check if rollback mode is enabled
+if [ "$FLAG_ROLLBACK" = "1" ]; then
+  # If rollback is enabled, set up rollback procedure
+  setup_rollback
+  # Restore local storage
+  restore_local_storage
+elif [ "$FLAG_SYNC" = "1" ]; then
+  # Send new configuration files to the slave server
+  sync_config_files
+  # Restart services on the slave server
+  restart_remote_services
+else
+  # Step 1: Pre-configuration checks
+  # These checks ensure the system is ready for further steps.
+  # If any required components are missing, the script will exit.
+  # Display welcome message and check if required commands are available
+  check_welcome
+
+  # Verify that all required commands are installed
+  check_required_commands
+  # Check the host role within the pool (e.g., master or slave)
+  check_host_role_in_pool
+  # Validate the size of the pool (ensure it contains exactly 2 hosts)
+  check_pool_size
+
+  # Step 2: Gather necessary replication parameters
+  # These functions will prompt the user for required inputs and store them in global variables
+  # Get hostname of the server ONE and TWO
+  get_hostname
+  # Get IP address of the server ONE and TWO
+  get_ip_address
+  # Update all user inputs to the local configuration file
+  update_iscsi_user_config
+  # Check which server is master and slave
+  check_active_master_slave
+  # If the '--ignore-host-check' flag is not set, proceed with host reachability checks
+  if [ "$FLAG_IGNORE_HOST_CHECK" -eq 1 ]; then
+    # Skip host reachability check if the flag is set
+    echo "Skipping host reachability check as '--ignore-host-check' flag is set."
+  else
+    # Check if the Slave Replication IP is reachable
+    check_host_reachable "$ACTIVE_SLAVE_IP"
+    # Check if the heuristic IP is reachable
+    check_host_reachable "$HEURISTIC_IP"
+  fi
+  # Get replication-related parameters (e.g., IPs, credentials)
+  get_replication_params
+  # Get the block device to be used for replication
+  get_block_device
+  # Get link speed for the DRBD connection
+  drbd_get_link_speed
+  # Get disk throughput for DRBD
+  drbd_get_disk_throughput
+  # Calculate DRBD rates based on system data
+  drbd_calculate_rates
+
+  # Step 3: Display summary of the current setup and ask to continue or cancel
+  setup_check_summary
+
+  # If the '--dry-run' flag is set, exit the script
+  if [ "$FLAG_DRY_RUN" -eq 1 ]; then
+    echo "Dry run completed. Exiting..."
+    exit 0
+  fi
+
+  # TODO: check if services are stopped (running the setup again)
+  # Step 4: Apply system changes
+  # Now that all checks and validations are done, we start applying configuration changes
+  # Update firewall rules to allow necessary traffic
+  firewall_update
+  # Update the LVM filter to block the specified devices
+  lvm_update_filter
+  # Update the DRBD configuration with the new settings
+  drbd_update_conf
+  # Set ha-cfg heuristic IP
+  ha-cfg set-quiet FENCE_HEURISTICS_IPS "$HEURISTIC_IP"
+  # Send new configuration files to the slave server
+  sync_config_files
+  # Restart services on the slave server
+  restart_remote_services
+  # Initialize DRBD devices and settings
+  drbd_initialize
+
+  # Step 5: Start necessary services
+  # Finally, we initialize the cluster services (ha-cfg and iscsi-cfg)
+  /usr/libexec/ha-lizard/initialize_cluster_services
+fi
+
+make_box "The final step involves creating a iSCSI storage repository in XenCenter,
+targeting $REPLICATION_IP_ISCSI.
+This completes the noSAN installation process."
