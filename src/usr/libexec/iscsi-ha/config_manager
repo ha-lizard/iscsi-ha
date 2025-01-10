@@ -13,8 +13,8 @@
 #                                                                               #
 #################################################################################
 
-ISCSI_HA_INIT='/etc/iscsi-ha/iscsi-ha.load'
-ISCSI_HA_FUNCTIONS='/etc/iscsi-ha/iscsi-ha.func'
+ISCSI_HA_INIT='/etc/iscsi-ha/iscsi-ha.init'
+ISCSI_HA_FUNCTIONS='/usr/lib64/iscsi-ha/iscsi-ha.func'
 IHA_IHA_CONF_FILE='/etc/iscsi-ha/iscsi-ha.conf'
 IHA_DRBD_CONF_FILE='/etc/drbd.conf'
 IHA_TGTD_CONF_FILE='/etc/tgt/conf.d/ha-targets.conf'

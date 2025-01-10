@@ -63,14 +63,14 @@ function check_logger_processes() {
 # Return 0 on success, or $? on failure
 ###########################################
 function local_ip_list() {
-  local -a local_ip_list
-  mapfile -t local_ip_list < <($IP addr show | $GREP inet | awk -F "inet " '{print $2}' | awk -F "/" '{print $1}')
+
+  mapfile -t LOCAL_IP_LIST < <($IP addr show | $GREP inet | awk -F "inet " '{print $2}' | awk -F "/" '{print $1}')
   local ret=$?
   if [ $ret -ne 0 ]; then
     log "Error retrieving local IP list on $HOST"
     return $ret
   else
-    log "$FUNCNAME: Local IP list returned ${local_ip_list[*]}"
+    log "$FUNCNAME: Local IP list returned ${LOCAL_IP_LIST[*]}"
     return 0
   fi
 } # End function local_ip_list
@@ -159,13 +159,12 @@ function email() {
     # due to bad config file, etc...
     ###############################################
     if [ ${#MAIL_SPOOL} -gt 1 ] && [ -d "$MAIL_SPOOL" ]; then
-      FLUSH_MAIL_EXEC="find $MAIL_SPOOL/ -name *.msg -type f -mmin +$MAIL_SCREEN_TIME -delete"
-      log "Ready to exec [${FLUSH_MAIL_EXEC}]"
-      ${FLUSH_MAIL_EXEC}
-      RETVAL=$?
-      log "FLUSH_MAIL_EXEC returned [$RETVAL]"
-      #find $MAIL_SPOOL/ -name *.msg -type f -mmin +$MAIL_SCREEN_TIME -delete
-      #log "MAIL_SPOOL=[$MAIL_SPOOL]  MAIL_SCREEN_TIME=[$MAIL_SCREEN_TIME]"
+      log "Ready to exec cleanup old mail queue"
+      if find "$MAIL_SPOOL"/ -name "*.msg" -type f -mmin +"$MAIL_SCREEN_TIME" -delete; then
+        log "Successfully cleaned up old mail queue"
+      else
+        log "Failed to clean up old mail queue"
+      fi
     fi
 
     ##############################################
@@ -417,7 +416,7 @@ function auto_plug_pbd() {
   # SRs. XE returns comma separated
   # list of SR UUIDs
   ##################################
-  SR_LIST=$($XE sr-list type=lvmoiscsi --minimal)
+  mapfile -t SR_LIST < <($XE sr-list type=lvmoiscsi --minimal | tr "," "\n")
   if [[ -n ${SR_LIST} ]]; then
     log "$FUNCNAME: Found LVMoISCSI SR List: $SR_LIST"
     RESTORE_IFS=$IFS
@@ -427,7 +426,7 @@ function auto_plug_pbd() {
       # Get list of PBDs to check for SR
       # on this iteration
       #####################################
-      PBD=$($XE pbd-list sr-uuid="$SR_UUID" currently-attached=false --minimal)
+      mapfile -t PBD < <($XE pbd-list sr-uuid="$SR_UUID" currently-attached=false --minimal | tr "," "\n")
 
       ######################################
       # Plug PBD if not attached
@@ -794,10 +793,15 @@ function send_network_bridge_arp() {
 ############################################
 
 function validate_drbd_resources_loaded() {
+  # Use command substitution to store the number of lines from /proc/drbd in drbd_load_state
   local drbd_load_state
-  readarray -t drbd_load_state < <(wc -l </proc/drbd)
-  log "$FUNCNAME: Checking DRBD has loaded with resources. Checking [ ${#drbd_load_state[@]} ] > [ 2 ]"
-  if ((${#drbd_load_state[@]} <= 2)); then
+  drbd_load_state=$(wc -l </proc/drbd)
+
+  # Log the state with the line count
+  log "$FUNCNAME: Checking DRBD has loaded with resources. Checking [ $drbd_load_state ] > [ 2 ]"
+
+  # Check if the number of lines is greater than 2
+  if [[ $drbd_load_state -le 2 ]]; then
     log "$FUNCNAME: No resources loaded"
     return 1
   else
@@ -828,7 +832,7 @@ function raise_alert() {
     return 1
   fi
 
-  local HA_CFG='/etc/ha-lizard/scripts/ha-cfg'
+  local HA_CFG='/usr/bin/ha-cfg'
 
   ##################################
   ## Make sure hs-cfg is installed

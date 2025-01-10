@@ -21,7 +21,7 @@
 #    along with iscsi-ha.  If not, see <http://www.gnu.org/licenses/>.          #
 #                                                                               #
 #################################################################################
-source /etc/iscsi-ha/iscsi-ha.load
+source /etc/iscsi-ha/iscsi-ha.init
 source /etc/iscsi-ha/iscsi-ha.conf
 source /usr/lib64/iscsi-ha/iscsi-ha.func
 
@@ -222,7 +222,7 @@ if [ "$STATE" = "master" ] || [ "$SET_ARG1" = "become_primary" ] && [ "$SET_ARG1
   ######################################
   IFS=":"
   for resource in "${DRBD_RESOURCES[@]}"; do
-    if check_drbd_resource_state "$resource" Primary; then
+    if ! check_drbd_resource_state "$resource" Primary; then
       if drbdadm primary "$resource"; then
         log "DRBD Resource: [$resource] successfully transitioned to Primary"
         email "DRBD Resource: [$resource] successfully transitioned to Primary" "4"
