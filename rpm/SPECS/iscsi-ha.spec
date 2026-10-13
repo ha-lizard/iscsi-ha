@@ -110,17 +110,16 @@ fi
 set -e
 echo "Setting up iscsi-ha..."
 
-# Disable scsi-target-utils service if it exists
-if systemctl list-units --type=service --quiet --all scsi-target.service; then
-    systemctl disable scsi-target.service
-    systemctl stop scsi-target.service
-fi
-
-# Disable drbd84-utils service if it exists
-if systemctl list-units --type=service --quiet --all drbd.service; then
-    systemctl disable drbd.service
-    systemctl stop drbd.service
-fi
+# Disable the distro-managed iSCSI target (TGT) and DRBD services if present.
+# The TGT unit name differs across releases (scsi-target.service on 8.2,
+# tgtd.service on 8.3), so we try both. iscsi-ha manages these itself, so the
+# distro units must not auto-start.
+for unit in scsi-target.service tgtd.service drbd.service; do
+    if systemctl cat "$unit" &>/dev/null; then
+        systemctl disable "$unit" || true
+        systemctl stop    "$unit" || true
+    fi
+done
 
 # Enable the services to start on boot
 if command -v systemctl &> /dev/null; then
