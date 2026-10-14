@@ -57,7 +57,7 @@ find %{_sysconfdir}/iscsi-ha -type f -name "*.sh" -exec chmod +x {} \;
 find %{_sysconfdir}/iscsi-ha/init -type f -exec chmod +x {} \;
 find %{_sysconfdir}/iscsi-ha/scripts -type f -exec chmod +x {} \;
 # Add CLI link
-ln -sf %{_sysconfdir}/iscsi-ha/scripts/iscsi-ha /usr/bin/iscsi-ha || true
+ln -sf %{_sysconfdir}/iscsi-ha/scripts/iscsi-cfg /usr/bin/iscsi-cfg || true
 
 # Tab completion for CLI
 # TODO: change filename extension
@@ -110,6 +110,7 @@ fi
 %postun
 #!/bin/bash
 if [ $1 -eq 0 ]; then
+    rm -f /usr/bin/iscsi-cfg
     rm -f /usr/bin/iscsi-ha
     rm -f %{_sysconfdir}/bash_completion.d/ha-cfg
     rm -f %{_sysconfdir}/systemd/system/iscsi-ha.service
