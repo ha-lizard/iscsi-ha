@@ -69,6 +69,17 @@ chmod +x /etc/bash_completion.d/iscsi-cfg || true
 cp %{_sysconfdir}/iscsi-ha/init/iscsi-ha /etc/init.d/
 cp %{_sysconfdir}/iscsi-ha/init/iscsi-ha-watchdog /etc/init.d/
 
+# Disable the distro-managed iSCSI target (TGT) and DRBD services if present.
+# The TGT unit name differs across releases (scsi-target.service on 8.2,
+# tgtd.service on 8.3), so we try both. iscsi-ha manages these itself, so the
+# distro units must not auto-start.
+for unit in scsi-target.service tgtd.service drbd.service; do
+    if systemctl cat "$unit" &>/dev/null; then
+        systemctl disable "$unit" || true
+        systemctl stop    "$unit" || true
+    fi
+done
+
 # Enable the services to start on boot
 if command -v systemctl &> /dev/null; then
     systemctl daemon-reload
