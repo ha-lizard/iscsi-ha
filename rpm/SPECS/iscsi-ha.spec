@@ -60,7 +60,6 @@ mkdir -p %{buildroot}%{_libexecdir}/iscsi-ha/scripts
 # Specifically install each one of the files
 install -D -m 644 etc/bash_completion.d/iscsi-cfg %{buildroot}%{_sysconfdir}/bash_completion.d/iscsi-cfg
 install -D -m 644 etc/iscsi-ha/iscsi-ha.conf %{buildroot}%{_sysconfdir}/iscsi-ha/iscsi-ha.conf
-install -D -m 644 etc/iscsi-ha/iscsi-ha.conf.defaults %{buildroot}%{_sysconfdir}/iscsi-ha/iscsi-ha.conf.defaults
 install -D -m 644 etc/iscsi-ha/iscsi-ha.init %{buildroot}%{_sysconfdir}/iscsi-ha/iscsi-ha.init
 install -D -m 644 etc/iscsi-ha/install.params %{buildroot}%{_sysconfdir}/iscsi-ha/install.params
 install -D -m 755 etc/init.d/iscsi-ha %{buildroot}%{_sysconfdir}/init.d/iscsi-ha
@@ -155,7 +154,6 @@ fi
 
 # Configuration files (this will NOT be replaced during upgrades)
 %config(noreplace) %{_sysconfdir}/iscsi-ha/iscsi-ha.conf
-%config(noreplace) %{_sysconfdir}/iscsi-ha/iscsi-ha.conf.defaults
 %config(noreplace) %{_sysconfdir}/iscsi-ha/iscsi-ha.init
 # Configuration files (this WILL be replaced during upgrades)
 %config %{_sysconfdir}/iscsi-ha/install.params
